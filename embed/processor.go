@@ -65,7 +65,7 @@ func (p *Processor) Specification() (sdk.Specification, error) {
 		Name:    "ai.embed",
 		Summary: "Generate vector embeddings for records using a pluggable provider.",
 		Description: "Reads the configured inputField, generates an embedding via the resolved provider " +
-			"(openai in this slice; voyage, cohere, ollama are seamed but not yet implemented), and writes the " +
+			"(openai and ollama in this slice; voyage, cohere are seamed but not yet implemented), and writes the " +
 			"vector to outputField along with provider/model/dimension/tokensUsed metadata. " +
 			"Sub-batches records within a single Process call only — see the package README's delivery-semantics " +
 			"note for what happens on partial and full batch failure.",

@@ -5,17 +5,18 @@ Voyage, Ollama, Cohere). Part of Conduit v0.20 (WS8) —
 see `docs/design-documents/20260724-ai-pipeline-components.md` in `ConduitIO/conduit` for the
 full design.
 
-## Status: Slice 1 (`ai.embed`, OpenAI only)
+## Status: Slice 1 (`ai.embed`, OpenAI + Ollama)
 
 This is the **first reviewable slice** of the embedding processor. Scope:
 
 - The `ai.embed` standalone-WASM processor, using `conduit-processor-sdk`'s host-mediated
   network-egress capability (`egress.Do`) for outbound HTTP — a WASI Preview 1 guest has no
   socket API of its own.
-- One working provider: **OpenAI** (`POST /v1/embeddings`).
+- Two working providers: **OpenAI** (`POST /v1/embeddings`) and **Ollama** (local,
+  `POST /api/embeddings`, one input per call — see the config table's `ollama.baseURL` row).
 - The `Provider` seam (config, resolution, ambiguity detection) is wired for **all four**
-  providers the design doc names (OpenAI, Voyage, Cohere, Ollama), but only OpenAI has a working
-  implementation — selecting the other three yields a coded
+  providers the design doc names (OpenAI, Voyage, Cohere, Ollama), but Voyage and Cohere don't
+  have a working implementation yet — selecting either yields a coded
   `ai.embedding_provider_not_implemented` error. See "Slicing note" below.
 - The **chunking processor** is not part of this slice.
 
@@ -29,7 +30,8 @@ the host-egress capability exists), and every vendor SDK does its own `net/http`
 internally, which cannot run inside the guest sandbox. The only coherent implementation is:
 hand-roll each provider's request/response JSON as thin structs (the endpoints are simple
 JSON-in/JSON-out) and call `egress.Do` for the actual transport, which the host performs under
-its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go` and `embed/doc.go`.
+its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go`, `embed/ollama.go`, and
+`embed/doc.go`.
 
 ## Delivery semantics — read before wiring this into a pipeline
 
@@ -59,7 +61,13 @@ its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go` and `
   `ai.embedding.tokensUsedScope: batch` — not divided per record. Summing `tokensUsed` across
   records in the same sub-batch will over-count; group by `(provider, model, tokensUsedScope)`
   and dedupe by batch if you need an accurate per-pipeline total. A single-record sub-batch gets
-  `tokensUsedScope: record`, which is exact for that one record.
+  `tokensUsedScope: record`, which is exact for that one record. Ollama's `/api/embeddings`
+  reports no usage figure at all, so an ollama-embedded record gets **no** `tokensUsed`/
+  `tokensUsedScope` metadata — never a fabricated `0`.
+- **Ollama accepts exactly one input per call.** `maxTextsPerBatch` is clamped to Ollama's
+  provider-reported ceiling of 1 (`ollamaProvider.MaxBatchSize`), so the sub-batcher issues one
+  `POST /api/embeddings` call per record for this provider — expected behavior given the vendor
+  API's shape, not a missed batching optimization.
 
 ## Configuration reference
 
@@ -79,7 +87,7 @@ its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go` and `
 | `openai.baseURL` | string | `https://api.openai.com` | OpenAI API base URL override. Must be within the pipeline's egress allowlist. |
 | `voyage.authSecretRef` | string | _(empty)_ | Wired for resolution/ambiguity detection; `voyage` provider not yet implemented. |
 | `cohere.authSecretRef` | string | _(empty)_ | Wired for resolution/ambiguity detection; `cohere` provider not yet implemented. |
-| `ollama.baseURL` | string | _(empty)_ | Wired for resolution/ambiguity detection; `ollama` provider not yet implemented. |
+| `ollama.baseURL` | string | _(empty, defaults to `http://localhost:11434` once ollama is selected)_ | Local Ollama server base URL. No auth secret — Ollama takes no API key. Must resolve within the pipeline's egress allowlist as an explicit `(IP,port)` carve-out for a loopback/private target. |
 
 ### Provider resolution
 
@@ -101,6 +109,10 @@ variables for a provider's own API key — see the note on credentials below for
 this is a property of the underlying host-egress capability (`conduit-processor-sdk`'s `egress`
 package), not something this processor opts into. There is no config path for a guest-supplied
 credential value.
+
+`ollama` has no credential config at all: a local Ollama server takes no API key, so
+`ollamaProvider` never sets `AuthSecretRef` on its `egress.Request`. Reachability instead depends
+on the pipeline's egress allowlist granting the server's `(IP,port)` as an explicit carve-out.
 
 ### Output
 
@@ -163,13 +175,12 @@ package.
 
 ## Slicing note — what's deliberately not in this slice
 
-- **`voyage`, `cohere`, `ollama` providers.** The `Provider` interface and resolution/ambiguity
-  seam already covers all four; each remaining provider is a `newXProvider(cfg) (Provider, error)`
-  following `embed/openai.go`'s shape (hand-rolled JSON, `egress.Do`, `doWithRetry`). Cohere and
-  Ollama have existing hand-rolled/vendored-client precedent elsewhere in the org to mirror
-  (`pkg/plugin/processor/builtin/impl/cohere`, `.../ollama` in `ConduitIO/conduit`); Voyage has no
-  existing Conduit precedent and needs its request/response shape sourced from Voyage's own API
-  docs.
+- **`voyage`, `cohere` providers.** The `Provider` interface and resolution/ambiguity seam already
+  covers all four; each remaining provider is a `newXProvider(cfg) (Provider, error)` following
+  `embed/openai.go`/`embed/ollama.go`'s shape (hand-rolled JSON, `egress.Do`, `doWithRetry`).
+  Cohere has existing vendored-client precedent elsewhere in the org to mirror
+  (`pkg/plugin/processor/builtin/impl/cohere` in `ConduitIO/conduit`); Voyage has no existing
+  Conduit precedent and needs its request/response shape sourced from Voyage's own API docs.
 - **The chunking processor.** A separate, non-network processor (`Process(records) -> records`,
   fan-out 1 input record to N output chunk records) — no dependency on the egress capability, can
   land independently of the remaining providers.

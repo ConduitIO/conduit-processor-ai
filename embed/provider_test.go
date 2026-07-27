@@ -90,8 +90,17 @@ func TestBuildProvider_OpenAIImplemented(t *testing.T) {
 	is.Equal(p.Name(), ProviderOpenAI)
 }
 
+func TestBuildProvider_OllamaImplemented(t *testing.T) {
+	is := is.New(t)
+	p, err := BuildProvider(ProviderOllama, Config{
+		Model: "nomic-embed-text",
+	})
+	is.NoErr(err)
+	is.Equal(p.Name(), ProviderOllama)
+}
+
 func TestBuildProvider_UnimplementedProvidersReturnCodedError(t *testing.T) {
-	for _, name := range []string{ProviderVoyage, ProviderCohere, ProviderOllama} {
+	for _, name := range []string{ProviderVoyage, ProviderCohere} {
 		t.Run(name, func(t *testing.T) {
 			is := is.New(t)
 			_, err := BuildProvider(name, Config{})
@@ -115,7 +124,7 @@ func TestBuildProvider_UnknownProviderRefused(t *testing.T) {
 func TestIsImplemented(t *testing.T) {
 	is := is.New(t)
 	is.True(IsImplemented(ProviderOpenAI))
+	is.True(IsImplemented(ProviderOllama))
 	is.True(!IsImplemented(ProviderVoyage))
 	is.True(!IsImplemented(ProviderCohere))
-	is.True(!IsImplemented(ProviderOllama))
 }

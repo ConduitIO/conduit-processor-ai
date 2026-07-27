@@ -97,7 +97,12 @@ type Config struct {
 	// Not yet implemented in this slice; see doc.go.
 	CohereAuthSecretRef string `json:"cohere.authSecretRef"`
 	// OllamaBaseURL, if set, makes "ollama" an auto-detection candidate
-	// (local Ollama has no API key). Not yet implemented in this slice;
-	// see doc.go.
+	// (local Ollama has no API key) and overrides the ollama provider's
+	// default target, "http://localhost:11434" (Ollama's own documented
+	// default; used when "ollama" is explicitly selected but this field is
+	// left empty). Must resolve within the pipeline's host-enforced egress
+	// allowlist — for a loopback/private target that means an explicit
+	// (IP,port) carve-out entry, not a bare hostname allowlist entry (see
+	// the egress package's design doc).
 	OllamaBaseURL string `json:"ollama.baseURL"`
 }

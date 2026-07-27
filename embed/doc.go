@@ -24,14 +24,15 @@
 //
 // # Slice 1 scope
 //
-// This is the first reviewable slice of the embedding processor. Only the
-// [ProviderOpenAI] adapter is implemented end to end; [ProviderVoyage],
-// [ProviderCohere], and [ProviderOllama] are named constants with a wired
-// resolution seam (config fields, auto-detection, ambiguity checking) but
-// selecting one yields a coded "ai.embedding_provider_not_implemented"
-// error, not a working call. See the package README's "Slicing note" for the plan to
-// fill in the remaining three providers, acceptance tests, and the bundle
-// end-to-end test in later slices.
+// This is the first reviewable slice of the embedding processor.
+// [ProviderOpenAI] and [ProviderOllama] adapters are implemented end to
+// end; [ProviderVoyage] and [ProviderCohere] are named constants with a
+// wired resolution seam (config fields, auto-detection, ambiguity
+// checking) but selecting one yields a coded
+// "ai.embedding_provider_not_implemented" error, not a working call. See
+// the package README's "Slicing note" for the plan to fill in the
+// remaining two providers, acceptance tests, and the bundle end-to-end
+// test in later slices.
 //
 // # Why the guest hand-rolls JSON instead of reusing a vendor SDK
 //
@@ -48,7 +49,9 @@
 // each provider's request/response JSON as thin structs (the endpoints are
 // simple JSON-in/JSON-out) and calls [egress.Do] for the actual transport,
 // which the host performs under its allowlist/DNS-rebinding/timeout/
-// size-cap policy. See [newOpenAIProvider] and openai.go for the shape.
+// size-cap policy. See [newOpenAIProvider] and openai.go for the shape;
+// [newOllamaProvider] and ollama.go follow the same shape for Ollama's
+// single-input-per-call /api/embeddings endpoint.
 //
 // # Batching is strictly within one Process call
 //

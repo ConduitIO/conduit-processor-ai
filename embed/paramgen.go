@@ -63,7 +63,7 @@ func (Config) Parameters() map[string]config.Parameter {
 		},
 		ConfigOllamaBaseURL: {
 			Default:     "",
-			Description: "OllamaBaseURL, if set, makes \"ollama\" an auto-detection candidate\n(local Ollama has no API key). Not yet implemented in this slice;\nsee doc.go.",
+			Description: "OllamaBaseURL, if set, makes \"ollama\" an auto-detection candidate\n(local Ollama has no API key) and overrides the ollama provider's\ndefault target, \"http://localhost:11434\" (Ollama's own documented\ndefault; used when \"ollama\" is explicitly selected but this field is\nleft empty). Must resolve within the pipeline's host-enforced egress\nallowlist — for a loopback/private target that means an explicit\n(IP,port) carve-out entry, not a bare hostname allowlist entry (see\nthe egress package's design doc).",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},

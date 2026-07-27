@@ -35,6 +35,7 @@ const EnvProvider = "CONDUIT_EMBED_PROVIDER"
 // working [Provider] for. See doc.go's Slice 1 scope note.
 var implementedProviders = map[string]bool{
 	ProviderOpenAI: true,
+	ProviderOllama: true,
 }
 
 // IsImplemented reports whether name has a working [Provider] in this
@@ -180,7 +181,9 @@ func BuildProvider(name string, cfg Config) (Provider, error) {
 	switch name {
 	case ProviderOpenAI:
 		return newOpenAIProvider(cfg)
-	case ProviderVoyage, ProviderCohere, ProviderOllama:
+	case ProviderOllama:
+		return newOllamaProvider(cfg)
+	case ProviderVoyage, ProviderCohere:
 		return nil, errProviderNotImplemented(name)
 	default:
 		return nil, errUnknownProvider(name)
