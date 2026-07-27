@@ -204,6 +204,15 @@ type batchItem struct {
 func (p *Processor) processBatch(ctx context.Context, records []opencdc.Record, out []sdk.ProcessedRecord) {
 	items := make([]batchItem, 0, len(records))
 	for i := range records {
+		// Tombstones / delete intents carry no content to embed and must pass
+		// through UNCHANGED so a downstream vector sink can action the delete
+		// (e.g. pgvector's delete-by-source_key fan-out). Trying to embed a
+		// delete would turn it into an ErrorRecord and strand the RAG delete
+		// path, orphaning the vectors the delete was meant to remove.
+		if records[i].Operation == opencdc.OperationDelete {
+			out[i] = sdk.SingleRecord(records[i])
+			continue
+		}
 		text, err := p.resolveInputText(&records[i])
 		if err != nil {
 			out[i] = sdk.ErrorRecord{Error: newFieldError(p.config.InputField, err)}
