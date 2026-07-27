@@ -32,8 +32,8 @@ func (Config) Parameters() map[string]config.Parameter {
 			Validations: []config.Validation{},
 		},
 		ConfigOutputField: {
-			Default:     ".Payload.After",
-			Description: "OutputField is the record field each chunk's text is written to on\nits output record. Defaults to overwriting InputField's target,\nmatching the embedding processor's own inputField/outputField\nconvention (see the sibling embed package's Config) — set this\nexplicitly if the pipeline needs the chunk text somewhere other than\n.Payload.After.",
+			Default:     ".Payload.After.text",
+			Description: "OutputField is the record field each chunk's text is written to on\nits output record. Default \".Payload.After.text\" writes the chunk's\ntext under a NAMED \"text\" field of a StructuredData payload — the\ncomposable RAG record shape (design doc / RAG contract): a chunk\nrecord's After is opencdc.StructuredData{\"text\": <chunk text>}, never\nraw bytes, so the sibling embed package's default inputField\n(\".Payload.After.text\") reads it directly, and so the embed\nprocessor's own default outputField (\".Payload.After.vector\") can add\nthe vector alongside this text field without clobbering it. Set this\nexplicitly (e.g. back to \".Payload.After\") if a pipeline needs the\nchunk text somewhere else.",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},

@@ -42,7 +42,13 @@ One input record produces **zero, one, or many** output records:
 - **Empty input text → zero chunks** (`sdk.MultiRecord{}`, equivalent to a filter — nothing to
   embed downstream).
 - **Non-empty text → one output record per chunk**, in order. Each chunk record carries:
-  - The chunk's text as the output record's payload (`outputField`, default `.Payload.After`).
+  - The chunk's text under a NAMED `"text"` field of a `StructuredData` payload (`outputField`,
+    default `.Payload.After.text`) — never raw bytes. This is the composable RAG record shape: the
+    sibling `ai.embed` processor's own default `inputField` (`.Payload.After.text`) reads this
+    field directly, and its default `outputField` (`.Payload.After.vector`) adds the embedding
+    vector alongside it without clobbering the text, so the canonical
+    `chunk → embed → pgvector` pipeline needs zero `inputField`/`outputField` configuration by
+    default (see `ai.embed`'s config reference and the example pipeline below).
   - `Key` set to the chunk's `chunk_id` (see below) — gives a destination connector's default
     upsert-by-`Key` behavior the right identity for free.
   - Metadata (**exact keys — this is the cross-component contract the pgvector destination
@@ -92,7 +98,7 @@ never silently dropped.
 | `chunkSize` | int | `1000` | Target maximum chunk size, in runes. |
 | `overlap` | int | `100` | Trailing runes repeated at the start of the next chunk. Only honored by `fixed_size`; must be `< chunkSize` for that strategy (`Config.Validate`, enforced at `Configure` time). |
 | `inputField` | string | `.Payload.After` | Record field read as the text to chunk. |
-| `outputField` | string | `.Payload.After` | Record field each chunk's text is written to. |
+| `outputField` | string | `.Payload.After.text` | Record field each chunk's text is written to, under a named `"text"` key of a `StructuredData` payload — see the fan-out section above. |
 
 ### Example pipeline
 
@@ -122,6 +128,12 @@ pipelines:
         settings:
           openai.authSecretRef: openai-api-key
           model: text-embedding-3-small
+          # inputField/outputField are intentionally left at their defaults here:
+          # ai.chunk's default outputField (.Payload.After.text) and ai.embed's
+          # default inputField (.Payload.After.text) / outputField
+          # (.Payload.After.vector) already compose — no field configuration
+          # needed to wire chunk -> embed -> a pgvector destination (whose own
+          # default vectorField is "vector").
 ```
 
 ### Slicing note — what's deliberately not in this slice
@@ -206,8 +218,8 @@ its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go`, `emb
 | --- | --- | --- | --- |
 | `provider` | string | _(empty)_ | Explicit provider: `openai` \| `voyage` \| `cohere` \| `ollama`. See Resolution below. |
 | `model` | string | _(empty, required once resolved)_ | Provider embedding model, e.g. `text-embedding-3-small`. |
-| `inputField` | string | `.Payload.After` | Record field read as the text to embed. |
-| `outputField` | string | `.Payload.After` | Record field the embedding vector (JSON array) is written to. Set explicitly (e.g. `.Payload.After.embedding`) to preserve the original text in a structured record. |
+| `inputField` | string | `.Payload.After.text` | Record field read as the text to embed — matches `ai.chunk`'s default `outputField` so the two processors compose with no field configuration. |
+| `outputField` | string | `.Payload.After.vector` | Record field the embedding vector (a native numeric array, never a JSON-encoded byte string) is written to, alongside the preserved `inputField` text. Also the field `conduit-connector-pgvector`'s destination reads by default (its own `vectorField` config defaults to `"vector"`). |
 | `maxTextsPerBatch` | int | `96` | Sub-batch ceiling within one `Process` call, clamped to the provider's own per-request limit. |
 | `requestTimeout` | duration | `30s` | Per host-mediated HTTP call deadline. |
 | `maxRetries` | int | `5` | Max retry attempts per sub-batch on 429/5xx before failing with `ai.embedding_provider_error`. |
@@ -249,7 +261,17 @@ on the pipeline's egress allowlist granting the server's `(IP,port)` as an expli
 
 On success, each record gets:
 
-- The embedding vector as a JSON `[]float32` array at `outputField`.
+- The embedding vector as a native array of `float64` elements (`[]any` in Go terms — **not** a
+  `json.Marshal`'d byte string) at `outputField`, default `.Payload.After.vector`, alongside the
+  original text still at `inputField` (default `.Payload.After.text`). The native-array shape is
+  deliberate: a `[]byte` value set on a *nested* structured field survives entirely in-process but
+  is silently corrupted once the record crosses a protobuf boundary (the WASM guest↔host boundary
+  this processor always runs behind, or a destination gRPC boundary downstream) — `structpb`
+  (`google.protobuf.Struct`, which `opencdc.StructuredData.ToProto` uses) has no "bytes" leaf kind
+  and base64-encodes a `[]byte` into a `STRING` instead, which a vector destination like
+  `conduit-connector-pgvector`'s `internal.ParseVector` does not accept. A `[]any` of `float64`
+  becomes a `structpb` `ListValue` of `NumberValue`s, which round-trips losslessly and is exactly
+  the shape `ParseVector` documents accepting.
 - Metadata: `ai.embedding.provider`, `ai.embedding.model`, `ai.embedding.dimension`,
   `ai.embedding.tokensUsed` (only when the provider reported usage — see the tokensUsed note
   above), `ai.embedding.tokensUsedScope` (`record` or `batch`).
@@ -277,8 +299,9 @@ pipelines:
         settings:
           openai.authSecretRef: openai-api-key # configured separately as a Conduit secret
           model: text-embedding-3-small
-          inputField: .Payload.After.text
-          outputField: .Payload.After.embedding
+          # inputField/outputField left at their defaults (.Payload.After.text /
+          # .Payload.After.vector) — set explicitly only if the upstream
+          # processor doesn't follow ai.chunk's default output shape.
           maxTextsPerBatch: "96"
 ```
 

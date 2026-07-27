@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
@@ -263,6 +264,29 @@ func (p *Processor) resolveSourceKey(rec *opencdc.Record) (string, error) {
 // over unchanged from the source record (see the package README for why).
 func (p *Processor) buildChunkRecord(rec *opencdc.Record, sourceKey string, idx int, sp span, runes []rune) (opencdc.Record, error) {
 	out := rec.Clone()
+
+	// If outputField writes into a structured subfield of Payload.After
+	// (the default, ".Payload.After.text"), the field resolver's walk only
+	// descends into Payload.After when it is already nil or
+	// opencdc.StructuredData — it refuses to walk into a non-structured
+	// value (config.go's default inputField, ".Payload.After", is commonly
+	// RawData or a plain string coming straight off a CDC source). This
+	// package's contract always replaces the chunk record's After payload
+	// with a fresh StructuredData (never merges chunk text into whatever
+	// raw bytes the source carried), so reset it here so the resolver can
+	// create the structured field it needs. A Payload.After that is
+	// ALREADY StructuredData (e.g. a source row with multiple columns) is
+	// left untouched here — its other fields are preserved as siblings of
+	// the chunk text, exactly like TestProcessor_RecordShape_StructuredPayload
+	// exercises.
+	if strings.HasPrefix(p.config.OutputField, ".Payload.After.") {
+		switch out.Payload.After.(type) {
+		case opencdc.StructuredData, nil:
+			// already walkable — leave as is (preserves sibling fields).
+		default:
+			out.Payload.After = nil
+		}
+	}
 
 	ref, err := p.outputResolver.Resolve(&out)
 	if err != nil {

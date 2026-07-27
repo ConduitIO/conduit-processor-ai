@@ -36,14 +36,23 @@ type Config struct {
 	// required-ness depends on which provider ends up selected.
 	Model string `json:"model"`
 
-	// InputField is the record field read as the text to embed.
-	InputField string `json:"inputField" default:".Payload.After"`
-	// OutputField is the record field the embedding vector is written to.
-	// Defaults to overwriting InputField's target, matching the shipped
-	// cohere.embed/openai.embeddings built-ins' convention — set this
-	// explicitly (e.g. ".Payload.After.embedding") to preserve the
-	// original chunk text alongside its embedding in a structured record.
-	OutputField string `json:"outputField" default:".Payload.After"`
+	// InputField is the record field read as the text to embed. Default
+	// ".Payload.After.text" matches the sibling chunk package's default
+	// outputField — the composable RAG record shape (design doc / RAG
+	// contract) a chunk record carries its text under a named "text" field
+	// of a StructuredData payload, never raw bytes.
+	InputField string `json:"inputField" default:".Payload.After.text"`
+	// OutputField is the record field the embedding vector is written to,
+	// as a native array (not a JSON-encoded byte string — see
+	// attachEmbedding). Default ".Payload.After.vector" preserves the
+	// original text (InputField) alongside the vector in the same
+	// structured record — this is also the field the pgvector destination
+	// reads by default (its own VectorField config defaults to "vector") —
+	// and is why this processor's OutputField and InputField default to
+	// two different subfields of the same StructuredData payload rather
+	// than both overwriting the whole field. Set this explicitly to change
+	// where the vector lands.
+	OutputField string `json:"outputField" default:".Payload.After.vector"`
 
 	// MaxTextsPerBatch bounds how many records' texts are sent in a single
 	// host-mediated embedding call. The processor sub-batches strictly

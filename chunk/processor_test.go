@@ -50,6 +50,22 @@ func recordWithKeyAndText(key, text string) opencdc.Record {
 	}
 }
 
+// chunkText extracts a chunk record's text under the default outputField
+// contract shape (opencdc.StructuredData{"text": ...}) — the composable RAG
+// record shape (design doc / RAG contract): a chunk record's After is never
+// raw bytes, so tests default-configured (outputField unset) must read the
+// "text" field rather than treat Payload.After.Bytes() as the chunk text
+// itself.
+func chunkText(t *testing.T, rec opencdc.Record) string {
+	t.Helper()
+	is := is.New(t)
+	after, ok := rec.Payload.After.(opencdc.StructuredData)
+	is.True(ok) // default outputField always produces a StructuredData payload
+	text, ok := after["text"].(string)
+	is.True(ok)
+	return text
+}
+
 // --- fan-out ---
 
 func TestProcessor_FanOutCount(t *testing.T) {
@@ -183,7 +199,7 @@ func TestProcessor_MetadataContract(t *testing.T) {
 		// the metadata isn't just present, it's correct against the
 		// original document.
 		want := string(runes[offset : offset+length])
-		is.Equal(string(chunkRec.Payload.After.Bytes()), want)
+		is.Equal(chunkText(t, chunkRec), want)
 
 		// Key carries the same chunk_id, giving a destination connector's
 		// default upsert-by-Key behavior the right identity for free.
@@ -207,7 +223,7 @@ func TestProcessor_OffsetLengthCorrectForSentenceStrategy(t *testing.T) {
 		offset, _ := strconv.Atoi(chunkRec.Metadata[MetadataChunkOffset])
 		length, _ := strconv.Atoi(chunkRec.Metadata[MetadataChunkLength])
 		want := string(runes[offset : offset+length])
-		is.Equal(string(chunkRec.Payload.After.Bytes()), want)
+		is.Equal(chunkText(t, chunkRec), want)
 	}
 }
 
@@ -313,7 +329,7 @@ func TestProcessor_RecordShape_RawPayload(t *testing.T) {
 
 	mr := out[0].(sdk.MultiRecord)
 	is.Equal(len(mr), 1)
-	is.Equal(string(mr[0].Payload.After.Bytes()), "raw payload text")
+	is.Equal(chunkText(t, mr[0]), "raw payload text")
 }
 
 func TestProcessor_RecordShape_StructuredPayload(t *testing.T) {
@@ -408,15 +424,15 @@ func TestProcessor_RoundTrip_FixedSizeWithOverlap(t *testing.T) {
 
 	var rebuilt strings.Builder
 	for i, chunkRec := range mr {
-		chunkText := string(chunkRec.Payload.After.Bytes())
+		txt := chunkText(t, chunkRec)
 		if i > 0 {
 			// Every chunk after the first repeats `overlap` runes from the
 			// previous one - trim them back out before rejoining.
-			chunkRunes := []rune(chunkText)
+			chunkRunes := []rune(txt)
 			is.True(len(chunkRunes) >= overlap)
-			chunkText = string(chunkRunes[overlap:])
+			txt = string(chunkRunes[overlap:])
 		}
-		rebuilt.WriteString(chunkText)
+		rebuilt.WriteString(txt)
 	}
 	is.Equal(rebuilt.String(), text)
 }
@@ -432,7 +448,7 @@ func TestProcessor_RoundTrip_SentenceStrategy(t *testing.T) {
 
 	var rebuilt strings.Builder
 	for _, chunkRec := range mr {
-		rebuilt.Write(chunkRec.Payload.After.Bytes())
+		rebuilt.WriteString(chunkText(t, chunkRec))
 	}
 	is.Equal(rebuilt.String(), text) // no overlap for this strategy - plain concatenation reconstructs exactly
 }
@@ -450,7 +466,7 @@ func TestProcessor_RoundTrip_RecursiveStrategy(t *testing.T) {
 
 	var rebuilt strings.Builder
 	for _, chunkRec := range mr {
-		rebuilt.Write(chunkRec.Payload.After.Bytes())
+		rebuilt.WriteString(chunkText(t, chunkRec))
 	}
 	is.Equal(rebuilt.String(), text)
 }
