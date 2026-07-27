@@ -99,17 +99,27 @@ func TestBuildProvider_OllamaImplemented(t *testing.T) {
 	is.Equal(p.Name(), ProviderOllama)
 }
 
-func TestBuildProvider_UnimplementedProvidersReturnCodedError(t *testing.T) {
-	for _, name := range []string{ProviderVoyage, ProviderCohere} {
-		t.Run(name, func(t *testing.T) {
-			is := is.New(t)
-			_, err := BuildProvider(name, Config{})
-			is.True(err != nil)
-			var perr *Error
-			is.True(errors.As(err, &perr))
-			is.Equal(perr.Code, CodeProviderNotImplemented)
-		})
-	}
+func TestBuildProvider_VoyageImplemented(t *testing.T) {
+	is := is.New(t)
+	p, err := BuildProvider(ProviderVoyage, Config{
+		VoyageAuthSecretRef: "voyage-key",
+		VoyageBaseURL:       "https://api.voyageai.com",
+		Model:               "voyage-3.5",
+	})
+	is.NoErr(err)
+	is.Equal(p.Name(), ProviderVoyage)
+}
+
+func TestBuildProvider_CohereImplemented(t *testing.T) {
+	is := is.New(t)
+	p, err := BuildProvider(ProviderCohere, Config{
+		CohereAuthSecretRef: "cohere-key",
+		CohereBaseURL:       "https://api.cohere.com",
+		CohereInputType:     "search_document",
+		Model:               "embed-english-v3.0",
+	})
+	is.NoErr(err)
+	is.Equal(p.Name(), ProviderCohere)
 }
 
 func TestBuildProvider_UnknownProviderRefused(t *testing.T) {
@@ -125,6 +135,21 @@ func TestIsImplemented(t *testing.T) {
 	is := is.New(t)
 	is.True(IsImplemented(ProviderOpenAI))
 	is.True(IsImplemented(ProviderOllama))
-	is.True(!IsImplemented(ProviderVoyage))
-	is.True(!IsImplemented(ProviderCohere))
+	is.True(IsImplemented(ProviderVoyage))
+	is.True(IsImplemented(ProviderCohere))
+	is.True(!IsImplemented("does-not-exist"))
+}
+
+// TestErrProviderNotImplemented_Coded keeps the retained forward-guard
+// mechanism (errProviderNotImplemented / CodeProviderNotImplemented, see
+// provider.go's implementedProviders) covered even though no real resolution
+// path reaches it now that all four named providers are built.
+func TestErrProviderNotImplemented_Coded(t *testing.T) {
+	is := is.New(t)
+	err := errProviderNotImplemented("future-provider")
+	var perr *Error
+	is.True(errors.As(err, &perr))
+	is.Equal(perr.Code, CodeProviderNotImplemented)
+	is.Equal(perr.ConfigPath, ConfigProvider)
+	is.True(perr.Suggestion != "")
 }

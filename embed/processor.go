@@ -36,6 +36,13 @@ const (
 	MetadataTokensScope = "ai.embedding.tokensUsedScope"
 )
 
+// Values for the MetadataTokensScope metadata key — see attachEmbedding and
+// [TokensScope].
+const (
+	metadataScopeRecord = "record"
+	metadataScopeBatch  = "batch"
+)
+
 // Processor is the standalone (WebAssembly) embedding processor. It
 // implements sdk.Processor's Specification/Configure/Open/Process via
 // embedding sdk.UnimplementedProcessor for the methods this slice doesn't
@@ -64,7 +71,7 @@ func (p *Processor) Specification() (sdk.Specification, error) {
 		Name:    "ai.embed",
 		Summary: "Generate vector embeddings for records using a pluggable provider.",
 		Description: "Reads the configured inputField, generates an embedding via the resolved provider " +
-			"(openai and ollama in this slice; voyage, cohere are seamed but not yet implemented), and writes the " +
+			"(openai, ollama, voyage, or cohere), and writes the " +
 			"vector to outputField along with provider/model/dimension/tokensUsed metadata. " +
 			"Sub-batches records within a single Process call only — see the package README's delivery-semantics " +
 			"note for what happens on partial and full batch failure.",
@@ -87,9 +94,14 @@ func (p *Processor) Configure(ctx context.Context, cfg config.Config) error {
 }
 
 // Validate checks cross-field invariants paramgen's per-field validations
-// (required/gt=0/...) can't express, and gives a fail-fast, coded error for
-// an explicitly-configured provider this slice doesn't implement yet,
-// rather than waiting until Open.
+// (required/gt=0/...) can't express, failing fast at Configure rather than
+// waiting until Open. It rejects an explicitly-configured provider name that
+// is not one of the four (a typo), and — as a forward-guard for the
+// incremental-slice workflow (see implementedProviders) — an explicitly
+// named-but-not-yet-built provider. With all four named providers now
+// implemented the second guard is vacuous, but it keeps a future
+// named-but-unbuilt provider failing with a clear coded error instead of a
+// nil-provider panic at Open.
 func (c Config) Validate() error {
 	if c.Provider != "" && c.Provider != ProviderOpenAI && c.Provider != ProviderVoyage &&
 		c.Provider != ProviderCohere && c.Provider != ProviderOllama {
@@ -234,8 +246,8 @@ func (p *Processor) processBatch(ctx context.Context, records []opencdc.Record, 
 		// Whole-batch failure: no record in items is embedded or passed
 		// through (invariant 1/3). Records that already failed field
 		// resolution above keep their own, distinct error. Providers are
-		// expected to return an already-coded error (see openai.go's
-		// classifyEgressError/classifyOpenAIStatus), but processBatch
+		// expected to return an already-coded error (see the shared
+		// classifyHostedEgressError and per-provider classify*Status), but processBatch
 		// wraps defensively so every record's error is guaranteed coded
 		// (ai.embedding_provider_error) even if a Provider implementation
 		// returns a bare error.
@@ -343,10 +355,10 @@ func (p *Processor) attachEmbedding(rec *opencdc.Record, vector []float32, resul
 		// number it didn't give us (design doc §2: "never estimated").
 	case TokensScopeRecord:
 		rec.Metadata[MetadataTokensUsed] = strconv.Itoa(result.TokensUsed)
-		rec.Metadata[MetadataTokensScope] = "record"
+		rec.Metadata[MetadataTokensScope] = metadataScopeRecord
 	case TokensScopeBatch:
 		rec.Metadata[MetadataTokensUsed] = strconv.Itoa(result.TokensUsed)
-		rec.Metadata[MetadataTokensScope] = "batch"
+		rec.Metadata[MetadataTokensScope] = metadataScopeBatch
 	}
 
 	return nil

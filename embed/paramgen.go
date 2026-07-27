@@ -9,6 +9,8 @@ import (
 
 const (
 	ConfigCohereAuthSecretRef = "cohere.authSecretRef"
+	ConfigCohereBaseURL       = "cohere.baseURL"
+	ConfigCohereInputType     = "cohere.inputType"
 	ConfigInputField          = "inputField"
 	ConfigMaxRetries          = "maxRetries"
 	ConfigMaxTextsPerBatch    = "maxTextsPerBatch"
@@ -23,13 +25,28 @@ const (
 	ConfigRetryBackoffMax     = "retryBackoff.max"
 	ConfigRetryBackoffMin     = "retryBackoff.min"
 	ConfigVoyageAuthSecretRef = "voyage.authSecretRef"
+	ConfigVoyageBaseURL       = "voyage.baseURL"
+	ConfigVoyageInputType     = "voyage.inputType"
+	ConfigVoyageOutputDtype   = "voyage.outputDtype"
 )
 
 func (Config) Parameters() map[string]config.Parameter {
 	return map[string]config.Parameter{
 		ConfigCohereAuthSecretRef: {
 			Default:     "",
-			Description: "CohereAuthSecretRef is the Cohere equivalent of OpenAIAuthSecretRef.\nNot yet implemented in this slice; see doc.go.",
+			Description: "CohereAuthSecretRef names the host-managed secret holding the Cohere\nAPI key — the Cohere equivalent of OpenAIAuthSecretRef, with the same\nhost-injection semantics and the same auto-detection role.",
+			Type:        config.ParameterTypeString,
+			Validations: []config.Validation{},
+		},
+		ConfigCohereBaseURL: {
+			Default:     "https://api.cohere.com",
+			Description: "CohereBaseURL overrides the Cohere API base URL. Must resolve within\nthe pipeline's host-enforced egress allowlist or every call fails\nwith ai.embedding_host_not_allowed (host-side, design doc §1).",
+			Type:        config.ParameterTypeString,
+			Validations: []config.Validation{},
+		},
+		ConfigCohereInputType: {
+			Default:     "search_document",
+			Description: "CohereInputType sets Cohere's REQUIRED input_type request field\n(Cohere's v3 embedding models 400 without it). \"search_document\" for\nstored RAG chunks — this processor's job in the canonical\nchunk → embed → pgvector pipeline — \"search_query\" for the retrieval\npath, plus \"classification\" and \"clustering\". Validated against that\nenum at provider construction. As with Voyage's input_type,\nmismatching it to the wrong side of a RAG pipeline silently degrades\nretrieval quality (valid vectors, wrong semantic space), which is why\nit is an explicit, defaulted, validated key rather than a hardcoded\nconstant. Default \"search_document\".",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},
@@ -119,7 +136,25 @@ func (Config) Parameters() map[string]config.Parameter {
 		},
 		ConfigVoyageAuthSecretRef: {
 			Default:     "",
-			Description: "VoyageAuthSecretRef is the Voyage AI equivalent of\nOpenAIAuthSecretRef. Slice 1 wires this into resolution and\nambiguity detection but the \"voyage\" provider itself is not yet\nimplemented — see doc.go's Slice 1 scope note.",
+			Description: "VoyageAuthSecretRef names the host-managed secret holding the Voyage\nAI API key — the Voyage equivalent of OpenAIAuthSecretRef, with the\nsame host-injection semantics (the raw key never enters guest memory)\nand the same auto-detection role (a non-empty value makes \"voyage\" a\nresolution candidate).",
+			Type:        config.ParameterTypeString,
+			Validations: []config.Validation{},
+		},
+		ConfigVoyageBaseURL: {
+			Default:     "https://api.voyageai.com",
+			Description: "VoyageBaseURL overrides the Voyage API base URL. Must resolve within\nthe pipeline's host-enforced egress allowlist or every call fails\nwith ai.embedding_host_not_allowed (host-side, design doc §1).",
+			Type:        config.ParameterTypeString,
+			Validations: []config.Validation{},
+		},
+		ConfigVoyageInputType: {
+			Default:     "document",
+			Description: "VoyageInputType sets Voyage's input_type request field: \"document\"\nfor stored RAG chunks (this processor's job in the canonical\nchunk → embed → pgvector pipeline), \"query\" for query-side embedding.\nSetting it improves retrieval quality; an empty value omits the field\n(Voyage then embeds without an input-type hint). Mismatching it to the\nwrong side of a RAG pipeline produces valid vectors that retrieve\nworse — a semantic misconfiguration nothing errors on, which is why it\nis an explicit, defaulted key. Default \"document\".",
+			Type:        config.ParameterTypeString,
+			Validations: []config.Validation{},
+		},
+		ConfigVoyageOutputDtype: {
+			Default:     "float",
+			Description: "VoyageOutputDtype sets Voyage's output_dtype request field. This slice\npins \"float\" — the only dtype pgvector's float vector path accepts;\nquantized dtypes (int8/binary) are out of scope and unsupported here.",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},

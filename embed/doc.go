@@ -22,17 +22,18 @@
 // docs/design-documents/20260724-ai-pipeline-components.md §4 (both in
 // ConduitIO/conduit).
 //
-// # Slice 1 scope
+// # Provider scope
 //
-// This is the first reviewable slice of the embedding processor.
-// [ProviderOpenAI] and [ProviderOllama] adapters are implemented end to
-// end; [ProviderVoyage] and [ProviderCohere] are named constants with a
-// wired resolution seam (config fields, auto-detection, ambiguity
-// checking) but selecting one yields a coded
-// "ai.embedding_provider_not_implemented" error, not a working call. See
-// the package README's "Slicing note" for the plan to fill in the
-// remaining two providers, acceptance tests, and the bundle end-to-end
-// test in later slices.
+// All four providers the design doc §2 names are implemented end to end:
+// [ProviderOpenAI], [ProviderOllama], [ProviderVoyage], and
+// [ProviderCohere], each a newXProvider adapter that hand-rolls the vendor's
+// request/response JSON and calls [egress.Do] for transport (see below). The
+// [IsImplemented] forward-guard (provider.go) is retained for a future
+// named-but-not-yet-built provider even though every currently-named provider
+// is built. Still deferred to later work (see the package README's "Slicing
+// note"): the bundle end-to-end test (Postgres CDC → chunk → embed →
+// pgvector), a generic SDK processor acceptance harness, and native fuzz
+// targets for the provider response parsers.
 //
 // # Why the guest hand-rolls JSON instead of reusing a vendor SDK
 //

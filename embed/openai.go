@@ -17,7 +17,6 @@ package embed
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -99,22 +98,12 @@ type openAIEmbeddingRequest struct {
 }
 
 // openAIEmbeddingResponse is OpenAI's POST /v1/embeddings success response
-// body.
+// body. Its data[] and batch-level usage are the shared OpenAI/Voyage shape
+// (see httpjson.go).
 type openAIEmbeddingResponse struct {
-	Data  []openAIEmbeddingDatum `json:"data"`
-	Model string                 `json:"model"`
-	Usage openAIUsage            `json:"usage"`
-}
-
-type openAIEmbeddingDatum struct {
-	Index     int       `json:"index"`
-	Embedding []float32 `json:"embedding"`
-}
-
-// openAIUsage is OpenAI's batch-level token usage. It is not broken down
-// per input, hence [TokensScopeBatch] — see provider.go's TokensScope doc.
-type openAIUsage struct {
-	TotalTokens int `json:"total_tokens"`
+	Data  []indexedEmbeddingDatum `json:"data"`
+	Model string                  `json:"model"`
+	Usage indexedEmbeddingUsage   `json:"usage"`
 }
 
 // openAIErrorResponse is OpenAI's error response body shape, used to
@@ -163,14 +152,14 @@ func (p *openAIProvider) doEmbedRequest(ctx context.Context, inputs []string) (e
 			Method: http.MethodPost,
 			URL:    p.baseURL + openAIEmbeddingsPath,
 			Headers: map[string][]string{
-				"Content-Type": {"application/json"},
+				headerContentType: {mimeJSON},
 			},
 			Body:          body,
 			AuthSecretRef: p.authSecretRef,
 		})
 	})
 	if err != nil {
-		return egress.Response{}, classifyEgressError(err)
+		return egress.Response{}, classifyHostedEgressError("openai embeddings", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return egress.Response{}, classifyOpenAIStatus(resp)
@@ -178,76 +167,16 @@ func (p *openAIProvider) doEmbedRequest(ctx context.Context, inputs []string) (e
 	return resp, nil
 }
 
-// parseEmbeddingResponse decodes an OpenAI embeddings success body into a
-// BatchResult, mapping each returned datum back to its input index 1:1 and
-// rejecting (rather than silently accepting) any shape that doesn't
-// account for exactly wantCount inputs — a short, garbled, or
-// out-of-range response is a provider-shape failure, not a partial
-// success.
+// parseEmbeddingResponse decodes an OpenAI embeddings success body and maps
+// it 1:1 back to its inputs via the shared indexed-response parser (see
+// parseIndexedEmbeddings in httpjson.go), rejecting any shape that doesn't
+// account for exactly wantCount inputs.
 func parseEmbeddingResponse(body []byte, wantCount int) (BatchResult, error) {
 	var parsed openAIEmbeddingResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return BatchResult{}, fmt.Errorf("decode openai embeddings response: %w", err)
 	}
-	if len(parsed.Data) != wantCount {
-		return BatchResult{}, fmt.Errorf(
-			"openai returned %d embeddings for a batch of %d inputs", len(parsed.Data), wantCount)
-	}
-
-	outcomes := make([]Outcome, wantCount)
-	seen := make([]bool, wantCount)
-	dimension := 0
-	for _, d := range parsed.Data {
-		if d.Index < 0 || d.Index >= len(outcomes) {
-			return BatchResult{}, fmt.Errorf(
-				"openai returned out-of-range index %d for a batch of %d", d.Index, wantCount)
-		}
-		outcomes[d.Index] = Outcome{Vector: d.Embedding}
-		seen[d.Index] = true
-		if dimension == 0 {
-			dimension = len(d.Embedding)
-		}
-	}
-	for i, ok := range seen {
-		if !ok {
-			return BatchResult{}, fmt.Errorf("openai response is missing an embedding for input index %d", i)
-		}
-	}
-
-	scope := TokensScopeBatch
-	if wantCount == 1 {
-		scope = TokensScopeRecord
-	}
-
-	return BatchResult{
-		Outcomes:    outcomes,
-		Model:       parsed.Model,
-		Dimension:   dimension,
-		TokensUsed:  parsed.Usage.TotalTokens,
-		TokensScope: scope,
-	}, nil
-}
-
-// classifyEgressError wraps an egress.Do failure (a transport-level or
-// policy-level rejection, or exhausted retries on a transient one) as a
-// coded ai.embedding_provider_error.
-func classifyEgressError(err error) error {
-	suggestion := "check network connectivity to the provider and the pipeline's egress allowlist configuration"
-	switch {
-	case errors.Is(err, egress.ErrEgressDisabled):
-		suggestion = "this processor was not opted into network egress by its operator; " +
-			"the pipeline config must allowlist the embedding provider's host"
-	case errors.Is(err, egress.ErrForbidden):
-		suggestion = "the embedding provider's host is not in the pipeline's egress allowlist"
-	case errors.Is(err, egress.ErrTimeout):
-		suggestion = "the provider call exceeded requestTimeout; consider raising it or checking provider latency"
-	}
-	return &Error{
-		Code:       CodeProviderError,
-		Message:    "openai embeddings call failed",
-		Suggestion: suggestion,
-		Cause:      err,
-	}
+	return parseIndexedEmbeddings("openai", parsed.Data, parsed.Model, parsed.Usage.TotalTokens, wantCount)
 }
 
 // classifyOpenAIStatus wraps a non-200 OpenAI response as a coded
@@ -264,10 +193,10 @@ func classifyOpenAIStatus(resp egress.Response) error {
 		msg = fmt.Sprintf("openai returned HTTP %d: %s", resp.StatusCode, parsed.Error.Message)
 	}
 
-	suggestion := "check the referenced auth secret and configured model"
+	suggestion := suggestStatusDefault
 	switch resp.StatusCode {
 	case http.StatusTooManyRequests:
-		suggestion = "rate-limit retries were exhausted (maxRetries); consider raising it or reducing maxTextsPerBatch"
+		suggestion = suggestStatus429
 	case http.StatusUnauthorized, http.StatusForbidden:
 		suggestion = "the API key referenced by openai.authSecretRef was rejected; verify it is valid and not expired"
 	case http.StatusBadRequest:

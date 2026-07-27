@@ -31,16 +31,29 @@ const (
 // Decision §1).
 const EnvProvider = "CONDUIT_EMBED_PROVIDER"
 
-// implementedProviders is the set of providers Slice 1 actually builds a
-// working [Provider] for. See doc.go's Slice 1 scope note.
+// implementedProviders is the set of provider names with a working
+// [Provider] adapter. All four the design doc §2 names are now built
+// (openai, ollama, voyage, cohere).
+//
+// The map + [IsImplemented] + [errProviderNotImplemented] mechanism is
+// retained deliberately as a forward-guard: it lets a future provider
+// constant be named and seamed (config field, resolution, ambiguity
+// detection) in one change and built in a later one, failing fast with a
+// coded ai.embedding_provider_not_implemented error in the interim rather
+// than nil-panicking. With every currently-named provider implemented, the
+// guard is presently vacuous — but keeping it costs nothing and preserves
+// the incremental-slice workflow the package was built with.
 var implementedProviders = map[string]bool{
 	ProviderOpenAI: true,
 	ProviderOllama: true,
+	ProviderVoyage: true,
+	ProviderCohere: true,
 }
 
-// IsImplemented reports whether name has a working [Provider] in this
-// slice (see doc.go's Slice 1 scope note). Used for fail-fast config
-// validation and by tests.
+// IsImplemented reports whether name has a working [Provider]. Used for
+// fail-fast config validation (Config.Validate) and by tests; see
+// implementedProviders for why the mechanism is retained now that all four
+// named providers are built.
 func IsImplemented(name string) bool {
 	return implementedProviders[name]
 }
@@ -175,16 +188,18 @@ func autoDetectCandidates(cfg Config) []string {
 }
 
 // BuildProvider constructs the [Provider] for the resolved provider name.
-// Returns a coded, non-retryable error for a name outside
-// implementedProviders — see doc.go's Slice 1 scope note.
+// Returns a coded ai.invalid_config error for a name that is not one of the
+// four the design doc §2 names (a typo, via errUnknownProvider).
 func BuildProvider(name string, cfg Config) (Provider, error) {
 	switch name {
 	case ProviderOpenAI:
 		return newOpenAIProvider(cfg)
 	case ProviderOllama:
 		return newOllamaProvider(cfg)
-	case ProviderVoyage, ProviderCohere:
-		return nil, errProviderNotImplemented(name)
+	case ProviderVoyage:
+		return newVoyageProvider(cfg)
+	case ProviderCohere:
+		return newCohereProvider(cfg)
 	default:
 		return nil, errUnknownProvider(name)
 	}

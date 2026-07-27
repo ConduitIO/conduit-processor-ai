@@ -35,9 +35,13 @@ const (
 	// ai.ambiguous_provider_configuration).
 	CodeAmbiguousProvider = "ai.ambiguous_provider_configuration"
 	// CodeProviderNotImplemented is raised when a resolved provider is
-	// named and seamed (config, resolution, ambiguity checking) but not
-	// yet built in this slice. Not part of the design doc's illustrative
-	// error-code set — see the package doc's Slice 1 scope note.
+	// named and seamed (config, resolution, ambiguity checking) but not yet
+	// built. Every provider the design doc §2 names is now implemented, so
+	// this is presently unreachable for a valid name; it is retained as a
+	// forward-guard for the incremental-slice workflow (see
+	// implementedProviders in provider.go) — a future named-but-unbuilt
+	// provider fails with this coded error rather than a nil-provider panic.
+	// Not part of the design doc's illustrative error-code set.
 	CodeProviderNotImplemented = "ai.embedding_provider_not_implemented"
 	// CodeProviderError is raised when the provider call itself fails:
 	// network, timeout, exhausted rate-limit retries, auth, or a
@@ -145,12 +149,18 @@ func errAmbiguousProvider(candidates []string) error {
 	}
 }
 
+// errProviderNotImplemented is the forward-guard error for a provider name
+// that is whitelisted but has no builder yet (see implementedProviders). It
+// is presently unreachable for a valid name — all four named providers are
+// built — but is retained so a future named-but-unbuilt provider fails fast
+// with a coded error instead of nil-panicking at Open.
 func errProviderNotImplemented(name string) error {
 	return &Error{
 		Code:       CodeProviderNotImplemented,
-		Message:    fmt.Sprintf("provider %q is named and seamed but not yet implemented in this slice", name),
+		Message:    fmt.Sprintf("provider %q is named and seamed but not yet built", name),
 		ConfigPath: ConfigProvider,
-		Suggestion: "use \"openai\" in this slice, or check the README's slicing note for when this provider lands",
+		Suggestion: "use one of the implemented providers (openai, ollama, voyage, cohere), " +
+			"or check the README for when this provider lands",
 	}
 }
 
