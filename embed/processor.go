@@ -97,7 +97,7 @@ func (c Config) Validate() error {
 		return &Error{
 			Code:       CodeInvalidConfig,
 			Message:    fmt.Sprintf("unknown provider %q", c.Provider),
-			ConfigPath: "provider",
+			ConfigPath: ConfigProvider,
 			Suggestion: "use one of: openai, voyage, cohere, ollama",
 		}
 	}

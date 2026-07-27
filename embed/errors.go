@@ -149,7 +149,7 @@ func errProviderNotImplemented(name string) error {
 	return &Error{
 		Code:       CodeProviderNotImplemented,
 		Message:    fmt.Sprintf("provider %q is named and seamed but not yet implemented in this slice", name),
-		ConfigPath: "provider",
+		ConfigPath: ConfigProvider,
 		Suggestion: "use \"openai\" in this slice, or check the README's slicing note for when this provider lands",
 	}
 }
@@ -164,7 +164,7 @@ func errUnknownProvider(name string) error {
 	return &Error{
 		Code:       CodeInvalidConfig,
 		Message:    fmt.Sprintf("unknown embedding provider %q", name),
-		ConfigPath: "provider",
+		ConfigPath: ConfigProvider,
 		Suggestion: "use one of: openai, voyage, cohere, ollama",
 	}
 }

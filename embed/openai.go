@@ -59,7 +59,7 @@ func newOpenAIProvider(cfg Config) (Provider, error) {
 		return nil, &Error{
 			Code:       CodeInvalidConfig,
 			Message:    "openai provider selected but openai.authSecretRef is not configured",
-			ConfigPath: "openai.authSecretRef",
+			ConfigPath: ConfigOpenaiAuthSecretRef,
 			Suggestion: "set openai.authSecretRef to the name of a host-managed secret holding the OpenAI API key",
 		}
 	}
@@ -67,7 +67,7 @@ func newOpenAIProvider(cfg Config) (Provider, error) {
 		return nil, &Error{
 			Code:       CodeInvalidConfig,
 			Message:    "openai provider selected but model is not configured",
-			ConfigPath: "model",
+			ConfigPath: ConfigModel,
 			Suggestion: `set model to an OpenAI embeddings model, e.g. "text-embedding-3-small"`,
 		}
 	}

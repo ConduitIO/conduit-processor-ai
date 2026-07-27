@@ -74,7 +74,7 @@ func newOllamaProvider(cfg Config) (Provider, error) {
 		return nil, &Error{
 			Code:       CodeInvalidConfig,
 			Message:    "ollama provider selected but model is not configured",
-			ConfigPath: "model",
+			ConfigPath: ConfigModel,
 			Suggestion: `set model to a model pulled on the target ollama server, e.g. "nomic-embed-text"`,
 		}
 	}
