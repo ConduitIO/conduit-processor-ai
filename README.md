@@ -5,7 +5,138 @@ Voyage, Ollama, Cohere). Part of Conduit v0.20 (WS8) —
 see `docs/design-documents/20260724-ai-pipeline-components.md` in `ConduitIO/conduit` for the
 full design.
 
-## Status: Slice 1 (`ai.embed`, OpenAI + Ollama)
+Two processors, two packages, one repo (design doc §3/§4, Open Questions §1 — kept together
+since they're always deployed as a pair in the canonical RAG pipeline):
+
+- **`ai.chunk`** (`chunk/`) — splits a record's text into N chunk records. Pure in-memory, no
+  host capability. See "ai.chunk — chunking processor" below.
+- **`ai.embed`** (`embed/`) — generates vector embeddings via a pluggable provider, using the
+  host-mediated network-egress capability. See "ai.embed — embedding processor" below.
+
+## `ai.chunk` — chunking processor (Slice 1)
+
+The RAG pipeline's first stage: `Postgres CDC → chunk → embed → pgvector`. This is the
+**first reviewable slice**: all three strategies (`fixed_size`, `sentence`, `recursive`), the
+fan-out/chunk_id/metadata contract, and tombstone handling are implemented and tested. Not in
+this slice: acceptance tests and the end-to-end RAG-sync template (see "Slicing note" below).
+
+### Strategies
+
+Selected via the `strategy` config key; see `chunk/doc.go` and `chunk/span.go` for the full
+algorithm documentation.
+
+| Strategy | What it does | Honors `overlap`? |
+| --- | --- | --- |
+| `fixed_size` (default) | A sliding window of `chunkSize` runes, advancing by `chunkSize - overlap` runes each step. | Yes — the only strategy that does. |
+| `sentence` | Splits on sentence-ending punctuation (`.`, `!`, `?`) followed by whitespace or end-of-text — a dependency-free heuristic, not an NLP tokenizer (no abbreviation handling). Sentences are packed greedily up to `chunkSize` without ever splitting one; a single sentence longer than `chunkSize` becomes its own oversized chunk rather than being cut mid-sentence. | No — natural boundaries, never repeated. |
+| `recursive` | Tries paragraph (`\n\n`) boundaries first; any piece still over `chunkSize` is recursively split on sentence boundaries, then word (whitespace) boundaries, then — only if a single word still exceeds `chunkSize` — hard-split at the rune level. Unlike `sentence` alone, **every** chunk is guaranteed to fit `chunkSize`. | No — natural boundaries, never repeated. |
+
+**Offsets and `chunkSize` are Unicode characters (runes), never bytes.** Every strategy converts
+its input to `[]rune` exactly once and only ever slices that rune slice, so a chunk boundary can
+never land inside a multi-byte character — see `chunk/span_test.go`'s unicode tests.
+
+### Fan-out and the metadata contract (design doc §3/§6)
+
+One input record produces **zero, one, or many** output records:
+
+- **Empty input text → zero chunks** (`sdk.MultiRecord{}`, equivalent to a filter — nothing to
+  embed downstream).
+- **Non-empty text → one output record per chunk**, in order. Each chunk record carries:
+  - The chunk's text as the output record's payload (`outputField`, default `.Payload.After`).
+  - `Key` set to the chunk's `chunk_id` (see below) — gives a destination connector's default
+    upsert-by-`Key` behavior the right identity for free.
+  - Metadata (**exact keys — this is the cross-component contract the pgvector destination
+    consumes**):
+
+    | Key | Value |
+    | --- | --- |
+    | `ai.chunk.id` | The deterministic `chunk_id`: `{source_record_key}:{chunk_index}` (0-based). |
+    | `ai.chunk.source_key` | The source record's `Key`, stringified. |
+    | `ai.chunk.index` | The chunk's 0-based index among its source record's chunks. |
+    | `ai.chunk.offset` | The chunk's start offset in the source document, in runes. |
+    | `ai.chunk.length` | The chunk's length, in runes. |
+
+**`chunk_id` is deterministic, never random or time-based** — derived solely from the source
+record's `Key` and the chunk's 0-based index. Two independent runs over an identical source
+record produce byte-for-byte identical `chunk_id`s; this is what makes the downstream pgvector
+upsert idempotent under retry/redelivery (design doc §6). `TestProcessor_DeterministicChunkIDs`
+in `chunk/processor_test.go` is the test that proves this property — it runs two fresh
+`Processor` instances (simulating two independent attempts) over the same record and asserts
+identical `chunk_id`s in the same order.
+
+**A source record with no `Key` cannot produce a stable `chunk_id`.** Rather than fabricate one
+(which would silently break the idempotency guarantee above), this is a coded, per-record error
+(`ai.chunk_missing_source_key`) routed to the pipeline's DLQ/error policy — never a silent drop,
+never a random fallback ID.
+
+### Tombstones / delete-intents
+
+A delete of the source record (`Operation == OperationDelete`) is **never chunked.** Instead the
+processor re-emits the exact same record — same `Operation`, `Key`, `Payload` (still a normal
+opencdc delete any destination understands on its own) — with one addition:
+`ai.chunk.source_key` metadata naming the deleted row.
+
+This is deliberately **not** a per-`chunk_id` delete: a single source row can have produced a
+different number of chunks at different points in its history (the document shrank or grew
+between edits), so this processor doesn't know — and doesn't guess — the full set of `chunk_id`s
+that need deleting. The vector destination resolves "every `chunk_id` ever derived from this
+`source_key`" itself by matching on the `ai.chunk.source_key` column (design doc §5). A tombstone
+with no `Key` is a coded error (`ai.chunk_missing_source_key`), the same as any other record —
+never silently dropped.
+
+### Configuration reference
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `strategy` | string | `fixed_size` | `fixed_size` \| `sentence` \| `recursive`. |
+| `chunkSize` | int | `1000` | Target maximum chunk size, in runes. |
+| `overlap` | int | `100` | Trailing runes repeated at the start of the next chunk. Only honored by `fixed_size`; must be `< chunkSize` for that strategy (`Config.Validate`, enforced at `Configure` time). |
+| `inputField` | string | `.Payload.After` | Record field read as the text to chunk. |
+| `outputField` | string | `.Payload.After` | Record field each chunk's text is written to. |
+
+### Example pipeline
+
+```yaml
+version: "2.2"
+pipelines:
+  - id: rag-chunk-example
+    status: running
+    connectors:
+      - id: source
+        type: source
+        plugin: builtin:generator
+        settings:
+          format.type: raw
+          format.options.text: "a longer document to split into chunks..."
+      - id: destination
+        type: destination
+        plugin: builtin:log
+    processors:
+      - id: chunk
+        plugin: standalone:ai-chunk # installed via `conduit processors install ai-chunk@<version>`
+        settings:
+          strategy: recursive
+          chunkSize: "500"
+      - id: embed
+        plugin: standalone:ai-embed
+        settings:
+          openai.authSecretRef: openai-api-key
+          model: text-embedding-3-small
+```
+
+### Slicing note — what's deliberately not in this slice
+
+- **Acceptance tests.** This slice has unit tests covering every strategy (including overlap,
+  boundary cases, and unicode/multibyte correctness), determinism, fan-out, tombstone handling,
+  and record shapes — a `conduit-connector-sdk`-style acceptance suite is a follow-up.
+- **The bundle end-to-end test.** Postgres CDC → chunk → embed → pgvector, CI-tested with records
+  asserted at the vector store (design doc §8/Testing) — depends on `conduit-connector-pgvector`,
+  out of scope here.
+- **Token-count-aware chunking.** `chunkSize` is a rune count, not a model-specific token count —
+  matching the design doc's "character count" framing for `fixed_size` (§3). A token-aware
+  variant is not in this slice.
+
+## `ai.embed` — embedding processor (Slice 1: OpenAI + Ollama)
 
 This is the **first reviewable slice** of the embedding processor. Scope:
 
@@ -20,7 +151,7 @@ This is the **first reviewable slice** of the embedding processor. Scope:
   `ai.embedding_provider_not_implemented` error. See "Slicing note" below.
 - The **chunking processor** is not part of this slice.
 
-## Why this hand-rolls JSON instead of reusing a vendor SDK
+### Why this hand-rolls JSON instead of reusing a vendor SDK
 
 The design doc's provider table frames OpenAI/Cohere's zero-new-dependency justification around
 reusing the already-vendored `go-openai`/`cohere-go` clients the core engine's built-in
@@ -33,7 +164,7 @@ JSON-in/JSON-out) and call `egress.Do` for the actual transport, which the host 
 its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go`, `embed/ollama.go`, and
 `embed/doc.go`.
 
-## Delivery semantics — read before wiring this into a pipeline
+### Delivery semantics — read before wiring this into a pipeline
 
 - **Batching is strictly within one `Process` call, never across calls.** The processor
   sub-batches only the records the engine hands it in the call currently executing into as few
@@ -69,7 +200,7 @@ its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go`, `emb
   `POST /api/embeddings` call per record for this provider — expected behavior given the vendor
   API's shape, not a missed batching optimization.
 
-## Configuration reference
+### Configuration reference
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -123,7 +254,7 @@ On success, each record gets:
   `ai.embedding.tokensUsed` (only when the provider reported usage — see the tokensUsed note
   above), `ai.embedding.tokensUsedScope` (`record` or `batch`).
 
-## Example pipeline
+### Example pipeline
 
 ```yaml
 version: "2.2"
@@ -154,26 +285,30 @@ pipelines:
 ## Building
 
 ```sh
-# Host-arch build, for running tests:
+# Host-arch build, for running tests (both processors):
 go build ./...
 
-# The real target — standalone WASM:
+# The real target — standalone WASM, one binary per processor:
+GOOS=wasip1 GOARCH=wasm go build -tags wasm -o chunking.wasm ./cmd/chunking
 GOOS=wasip1 GOARCH=wasm go build -tags wasm -o embedding.wasm ./cmd/embedding
 
 go vet ./...
 go test -race ./...
 ```
 
+`ai.chunk` (`chunk/`) needs no host capability and no `egress` dependency — only `ai.embed`
+(`embed/`) uses the network-egress capability described below.
+
 ## Development note: the `go.mod` replace directive
 
 `go.mod` currently has a `replace` pointing at a local, unreleased checkout of
-`conduit-processor-sdk`'s `feat/wasm-host-egress` branch — the `egress` package this repo depends
-on isn't tagged yet. **This must be repointed to a tagged `conduit-processor-sdk` release before
-this repo's PR merges.** A `.golangci.yml` exclusion scoped to `go.mod` documents this; remove
-both the `replace` and the exclusion together once a tagged SDK release ships the `egress`
-package.
+`conduit-processor-sdk`'s `feat/wasm-host-egress` branch — the `egress` package `ai.embed`
+depends on isn't tagged yet (`ai.chunk` doesn't use it and is unaffected by this note).
+**This must be repointed to a tagged `conduit-processor-sdk` release before this repo's PR
+merges.** A `.golangci.yml` exclusion scoped to `go.mod` documents this; remove both the
+`replace` and the exclusion together once a tagged SDK release ships the `egress` package.
 
-## Slicing note — what's deliberately not in this slice
+### Slicing note — what's deliberately not in this `ai.embed` slice
 
 - **`voyage`, `cohere` providers.** The `Provider` interface and resolution/ambiguity seam already
   covers all four; each remaining provider is a `newXProvider(cfg) (Provider, error)` following

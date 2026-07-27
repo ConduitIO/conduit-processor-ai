@@ -152,6 +152,55 @@ func TestProcessor_NeverAccumulatesAcrossProcessCalls(t *testing.T) {
 
 // --- Invariant 1/3: partial-batch and full-batch failure handling ---
 
+// TestProcessor_TombstonePassesThroughUnembedded is the RAG-delete-path
+// regression: a delete tombstone (the chunking processor's re-emitted delete
+// intent) must pass through the embedding stage UNCHANGED — never embedded,
+// never turned into an ErrorRecord — so it reaches the vector sink's
+// delete-by-source_key fan-out. Embedding a delete would orphan the vectors the
+// delete was meant to remove.
+func TestProcessor_TombstonePassesThroughUnembedded(t *testing.T) {
+	is := is.New(t)
+
+	var gotInputs [][]string
+	fp := &fakeProvider{
+		name:     "fake",
+		maxBatch: 96,
+		resultFn: func(inputs []string) (BatchResult, error) {
+			gotInputs = append(gotInputs, append([]string(nil), inputs...))
+			return allSucceed(len(inputs), 0)(inputs)
+		},
+	}
+	p := newTestProcessor(t, nil, fp)
+
+	tombstone := opencdc.Record{
+		Operation: opencdc.OperationDelete,
+		Key:       opencdc.RawData("orders:42"),
+		Metadata:  opencdc.Metadata{"ai.chunk.source_key": "orders:42"},
+	}
+	out := p.Process(context.Background(), []opencdc.Record{
+		recordWithText("embed me"),
+		tombstone,
+	})
+
+	is.Equal(len(out), 2)
+
+	// The content record is embedded.
+	_, ok := out[0].(sdk.SingleRecord)
+	is.True(ok)
+
+	// The tombstone passes through unchanged: SingleRecord, still a delete, no
+	// embedding written, and NOT an ErrorRecord.
+	passed, ok := out[1].(sdk.SingleRecord)
+	is.True(ok)
+	is.Equal(opencdc.Record(passed).Operation, opencdc.OperationDelete)
+	is.Equal(opencdc.Record(passed).Metadata["ai.chunk.source_key"], "orders:42")
+
+	// The provider was only ever handed the one content record — the tombstone
+	// never reached it.
+	is.Equal(len(gotInputs), 1)
+	is.Equal(gotInputs[0], []string{"embed me"})
+}
+
 func TestProcessor_FullBatchFailure_NoPassthrough(t *testing.T) {
 	is := is.New(t)
 	wantErr := errors.New("provider unreachable")
