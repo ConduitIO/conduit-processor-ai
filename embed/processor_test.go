@@ -16,7 +16,6 @@ package embed
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -81,10 +80,14 @@ func newTestProcessor(t *testing.T, cfgOverrides map[string]string, provider Pro
 	return p
 }
 
+// recordWithText builds a record matching the composable RAG record shape
+// (design doc / RAG contract) a chunk record actually carries: text under a
+// named "text" field of a StructuredData payload, never raw bytes — this is
+// what Config.InputField's new default (".Payload.After.text") expects.
 func recordWithText(text string) opencdc.Record {
 	return opencdc.Record{
 		Metadata: opencdc.Metadata{},
-		Payload:  opencdc.Change{After: opencdc.RawData(text)},
+		Payload:  opencdc.Change{After: opencdc.StructuredData{"text": text}},
 	}
 }
 
@@ -313,12 +316,20 @@ func TestProcessor_FieldResolutionError_IsolatedPerRecord(t *testing.T) {
 	is.Equal(fp.calls[0], []string{"good-a", "good-b"})
 }
 
-// --- Output contract: metadata + JSON round-trip ---
+// --- Output contract: metadata + native vector shape round-trip ---
 
+// TestProcessor_AttachEmbedding_MetadataAndVectorRoundTrip proves the
+// composable RAG record shape (design doc / RAG contract) with this
+// package's defaults left untouched: InputField reads ".Payload.After.text"
+// (recordWithText's shape) and OutputField writes ".Payload.After.vector" —
+// leaving "text" in place alongside the new "vector" field, and writing the
+// vector as a native []any of float64 (never json.Marshal'd bytes — see
+// attachEmbedding's doc comment for why a []byte on a nested field silently
+// corrupts across a protobuf boundary).
 func TestProcessor_AttachEmbedding_MetadataAndVectorRoundTrip(t *testing.T) {
 	is := is.New(t)
 	fp := &fakeProvider{name: "openai", maxBatch: 96, resultFn: allSucceed(4, 123)}
-	p := newTestProcessor(t, map[string]string{"outputField": ".Payload.After"}, fp)
+	p := newTestProcessor(t, nil, fp)
 
 	out := p.Process(context.Background(), []opencdc.Record{recordWithText("hello")})
 	is.Equal(len(out), 1)
@@ -332,9 +343,17 @@ func TestProcessor_AttachEmbedding_MetadataAndVectorRoundTrip(t *testing.T) {
 	is.Equal(rec.Metadata[MetadataTokensUsed], "123")
 	is.Equal(rec.Metadata[MetadataTokensScope], "record") // single-input sub-batch
 
-	var vec []float32
-	is.NoErr(json.Unmarshal(rec.Payload.After.Bytes(), &vec))
-	is.Equal(len(vec), 4)
+	after, ok := rec.Payload.After.(opencdc.StructuredData)
+	is.True(ok)
+	is.Equal(after["text"], "hello") // original text preserved alongside the vector
+
+	vecAny, ok := after["vector"].([]any)
+	is.True(ok) // native []any, never a JSON-encoded []byte
+	is.Equal(len(vecAny), 4)
+	for _, e := range vecAny {
+		_, ok := e.(float64)
+		is.True(ok) // every element is a float64, matching pgvector's internal.ParseVector's accepted shape
+	}
 }
 
 // --- Configure/Open wiring ---
@@ -365,8 +384,8 @@ func TestProcessor_Configure_AppliesDefaults(t *testing.T) {
 	p := NewProcessor()
 	is.NoErr(p.Configure(context.Background(), config.Config{"openai.authSecretRef": "k"}))
 	is.Equal(p.config.MaxTextsPerBatch, 96)
-	is.Equal(p.config.InputField, ".Payload.After")
-	is.Equal(p.config.OutputField, ".Payload.After")
+	is.Equal(p.config.InputField, ".Payload.After.text")
+	is.Equal(p.config.OutputField, ".Payload.After.vector")
 	is.Equal(p.config.MaxRetries, 5)
 }
 

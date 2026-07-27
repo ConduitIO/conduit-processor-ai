@@ -16,7 +16,6 @@ package embed
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -298,22 +297,37 @@ func (p *Processor) resolveInputText(rec *opencdc.Record) (string, error) {
 	}
 }
 
-// attachEmbedding writes vector to Config.OutputField and sets the
-// provider/model/dimension/tokensUsed metadata (design doc §4's output
-// contract). tokensUsed is only set when result.TokensScope is not
-// TokensScopeUnknown — this package never estimates a token count the
-// provider didn't report (design doc §2: "never estimated").
+// attachEmbedding writes vector to Config.OutputField as a native []any of
+// float64 — deliberately NOT json.Marshal'd to a []byte. A []byte value
+// Set on a NESTED structured field (this package's default outputField,
+// ".Payload.After.vector") survives entirely in-process, but silently
+// corrupts once the record crosses a protobuf boundary (the WASM guest<->
+// host boundary this processor always runs behind, or a destination gRPC
+// boundary downstream): opencdc.StructuredData.ToProto encodes via
+// structpb (google.protobuf.Struct), which has no "bytes" leaf kind — it
+// base64-encodes a []byte into a STRING, which a vector destination like
+// pgvector's internal.ParseVector does not accept. A []any of float64
+// elements, in contrast, becomes a structpb ListValue of NumberValues,
+// which round-trips losslessly and is exactly the shape
+// pgvector's internal.ParseVector documents accepting ("[]any of JSON
+// numbers"). See the sibling chunk package and design doc's RAG contract
+// for the composable record shape this and OutputField's default rely on.
+// It also sets the provider/model/dimension/tokensUsed metadata (design
+// doc §4's output contract). tokensUsed is only set when
+// result.TokensScope is not TokensScopeUnknown — this package never
+// estimates a token count the provider didn't report (design doc §2:
+// "never estimated").
 func (p *Processor) attachEmbedding(rec *opencdc.Record, vector []float32, result BatchResult) error {
-	vectorJSON, err := json.Marshal(vector)
-	if err != nil {
-		return fmt.Errorf("marshal embedding vector: %w", err)
+	vec := make([]any, len(vector))
+	for i, f := range vector {
+		vec[i] = float64(f)
 	}
 
 	ref, err := p.outputResolver.Resolve(rec)
 	if err != nil {
 		return newFieldError(p.config.OutputField, fmt.Errorf("resolve outputField: %w", err))
 	}
-	if err := ref.Set(vectorJSON); err != nil {
+	if err := ref.Set(vec); err != nil {
 		return newFieldError(p.config.OutputField, fmt.Errorf("set outputField: %w", err))
 	}
 

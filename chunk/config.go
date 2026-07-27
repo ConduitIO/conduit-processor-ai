@@ -60,12 +60,17 @@ type Config struct {
 	// InputField is the record field read as the text to chunk.
 	InputField string `json:"inputField" default:".Payload.After"`
 	// OutputField is the record field each chunk's text is written to on
-	// its output record. Defaults to overwriting InputField's target,
-	// matching the embedding processor's own inputField/outputField
-	// convention (see the sibling embed package's Config) — set this
-	// explicitly if the pipeline needs the chunk text somewhere other than
-	// .Payload.After.
-	OutputField string `json:"outputField" default:".Payload.After"`
+	// its output record. Default ".Payload.After.text" writes the chunk's
+	// text under a NAMED "text" field of a StructuredData payload — the
+	// composable RAG record shape (design doc / RAG contract): a chunk
+	// record's After is opencdc.StructuredData{"text": <chunk text>}, never
+	// raw bytes, so the sibling embed package's default inputField
+	// (".Payload.After.text") reads it directly, and so the embed
+	// processor's own default outputField (".Payload.After.vector") can add
+	// the vector alongside this text field without clobbering it. Set this
+	// explicitly (e.g. back to ".Payload.After") if a pipeline needs the
+	// chunk text somewhere else.
+	OutputField string `json:"outputField" default:".Payload.After.text"`
 }
 
 // Validate checks cross-field invariants paramgen's per-field validations

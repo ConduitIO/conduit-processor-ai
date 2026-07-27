@@ -34,8 +34,8 @@ func (Config) Parameters() map[string]config.Parameter {
 			Validations: []config.Validation{},
 		},
 		ConfigInputField: {
-			Default:     ".Payload.After",
-			Description: "InputField is the record field read as the text to embed.",
+			Default:     ".Payload.After.text",
+			Description: "InputField is the record field read as the text to embed. Default\n\".Payload.After.text\" matches the sibling chunk package's default\noutputField — the composable RAG record shape (design doc / RAG\ncontract) a chunk record carries its text under a named \"text\" field\nof a StructuredData payload, never raw bytes.",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},
@@ -80,8 +80,8 @@ func (Config) Parameters() map[string]config.Parameter {
 			Validations: []config.Validation{},
 		},
 		ConfigOutputField: {
-			Default:     ".Payload.After",
-			Description: "OutputField is the record field the embedding vector is written to.\nDefaults to overwriting InputField's target, matching the shipped\ncohere.embed/openai.embeddings built-ins' convention — set this\nexplicitly (e.g. \".Payload.After.embedding\") to preserve the\noriginal chunk text alongside its embedding in a structured record.",
+			Default:     ".Payload.After.vector",
+			Description: "OutputField is the record field the embedding vector is written to,\nas a native array (not a JSON-encoded byte string — see\nattachEmbedding). Default \".Payload.After.vector\" preserves the\noriginal text (InputField) alongside the vector in the same\nstructured record — this is also the field the pgvector destination\nreads by default (its own VectorField config defaults to \"vector\") —\nand is why this processor's OutputField and InputField default to\ntwo different subfields of the same StructuredData payload rather\nthan both overwriting the whole field. Set this explicitly to change\nwhere the vector lands.",
 			Type:        config.ParameterTypeString,
 			Validations: []config.Validation{},
 		},
