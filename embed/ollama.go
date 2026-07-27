@@ -170,7 +170,7 @@ func (p *ollamaProvider) doEmbedRequest(ctx context.Context, input string) (egre
 			Method: http.MethodPost,
 			URL:    p.baseURL + ollamaEmbeddingsPath,
 			Headers: map[string][]string{
-				"Content-Type": {"application/json"},
+				headerContentType: {mimeJSON},
 			},
 			Body: body,
 			// No AuthSecretRef: Ollama takes no API key (see the

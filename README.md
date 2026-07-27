@@ -155,12 +155,11 @@ This is the **first reviewable slice** of the embedding processor. Scope:
 - The `ai.embed` standalone-WASM processor, using `conduit-processor-sdk`'s host-mediated
   network-egress capability (`egress.Do`) for outbound HTTP — a WASI Preview 1 guest has no
   socket API of its own.
-- Two working providers: **OpenAI** (`POST /v1/embeddings`) and **Ollama** (local,
+- **All four providers** the design doc names are implemented: **OpenAI**
+  (`POST /v1/embeddings`), **Voyage** (`POST /v1/embeddings`, OpenAI-shaped), **Cohere**
+  (`POST /v1/embed`, object-form `embeddings.float`), and **Ollama** (local,
   `POST /api/embeddings`, one input per call — see the config table's `ollama.baseURL` row).
-- The `Provider` seam (config, resolution, ambiguity detection) is wired for **all four**
-  providers the design doc names (OpenAI, Voyage, Cohere, Ollama), but Voyage and Cohere don't
-  have a working implementation yet — selecting either yields a coded
-  `ai.embedding_provider_not_implemented` error. See "Slicing note" below.
+  Each is a hand-rolled-JSON adapter over `egress.Do` (see below).
 - The **chunking processor** is not part of this slice.
 
 ### Why this hand-rolls JSON instead of reusing a vendor SDK
@@ -198,15 +197,16 @@ its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go`, `emb
   when the provider sends one. Exhausting `maxRetries` surfaces `ai.embedding_provider_error` —
   the batch is not silently dropped or acked. A non-429 4xx (e.g. a bad API key) is **not**
   retried — it fails fast so a misconfigured pipeline doesn't burn its retry budget.
-- **`tokensUsed` metadata is never estimated.** OpenAI's `/v1/embeddings` reports token usage
+- **`tokensUsed` metadata is never estimated.** OpenAI (`usage.total_tokens`), Voyage
+  (`usage.total_tokens`), and Cohere (`meta.billed_units.input_tokens`) all report token usage
   once per call, not per input, so for a sub-batch of more than one record the `tokensUsed`
   metadata is the **whole sub-batch's** token count, verbatim from the provider, tagged
   `ai.embedding.tokensUsedScope: batch` — not divided per record. Summing `tokensUsed` across
   records in the same sub-batch will over-count; group by `(provider, model, tokensUsedScope)`
   and dedupe by batch if you need an accurate per-pipeline total. A single-record sub-batch gets
   `tokensUsedScope: record`, which is exact for that one record. Ollama's `/api/embeddings`
-  reports no usage figure at all, so an ollama-embedded record gets **no** `tokensUsed`/
-  `tokensUsedScope` metadata — never a fabricated `0`.
+  reports no usage figure at all (and Cohere may omit `billed_units` on some plans), so such a
+  record gets **no** `tokensUsed`/`tokensUsedScope` metadata — never a fabricated `0`.
 - **Ollama accepts exactly one input per call.** `maxTextsPerBatch` is clamped to Ollama's
   provider-reported ceiling of 1 (`ollamaProvider.MaxBatchSize`), so the sub-batcher issues one
   `POST /api/embeddings` call per record for this provider — expected behavior given the vendor
@@ -228,8 +228,13 @@ its allowlist/DNS-rebinding/timeout/size-cap policy. See `embed/openai.go`, `emb
 | `retryBackoff.factor` | float | `2` | Exponential backoff multiplier. |
 | `openai.authSecretRef` | string | _(empty)_ | Name of a host-managed secret holding the OpenAI API key. **Never a raw key value** — see Credentials below. |
 | `openai.baseURL` | string | `https://api.openai.com` | OpenAI API base URL override. Must be within the pipeline's egress allowlist. |
-| `voyage.authSecretRef` | string | _(empty)_ | Wired for resolution/ambiguity detection; `voyage` provider not yet implemented. |
-| `cohere.authSecretRef` | string | _(empty)_ | Wired for resolution/ambiguity detection; `cohere` provider not yet implemented. |
+| `voyage.authSecretRef` | string | _(empty)_ | Name of a host-managed secret holding the Voyage API key. **Never a raw key value.** |
+| `voyage.baseURL` | string | `https://api.voyageai.com` | Voyage API base URL override. Must be within the pipeline's egress allowlist. |
+| `voyage.inputType` | string | `document` | Voyage `input_type`: `document` for stored RAG chunks, `query` for query-side embedding. Empty omits the field. Mismatching it degrades retrieval quality without erroring — see below. |
+| `voyage.outputDtype` | string | `float` | Voyage `output_dtype`. This slice supports `float` only (pgvector's float path); `int8`/`binary` are out of scope. |
+| `cohere.authSecretRef` | string | _(empty)_ | Name of a host-managed secret holding the Cohere API key. **Never a raw key value.** |
+| `cohere.baseURL` | string | `https://api.cohere.com` | Cohere API base URL override. Must be within the pipeline's egress allowlist. |
+| `cohere.inputType` | string | `search_document` | Cohere's **required** `input_type`, validated against `search_document` \| `search_query` \| `classification` \| `clustering`. Use `search_document` for stored RAG chunks; mismatching it degrades retrieval quality without erroring — see below. |
 | `ollama.baseURL` | string | _(empty, defaults to `http://localhost:11434` once ollama is selected)_ | Local Ollama server base URL. No auth secret — Ollama takes no API key. Must resolve within the pipeline's egress allowlist as an explicit `(IP,port)` carve-out for a loopback/private target. |
 
 ### Provider resolution
@@ -247,15 +252,35 @@ variables for a provider's own API key — see the note on credentials below for
 
 ### Credentials
 
-`openai.authSecretRef` names a secret; Conduit's host resolves it and injects it as the
-`Authorization` header immediately before dispatch. **The processor never sees the raw API key** —
-this is a property of the underlying host-egress capability (`conduit-processor-sdk`'s `egress`
-package), not something this processor opts into. There is no config path for a guest-supplied
-credential value.
+`openai.authSecretRef` (and likewise `voyage.authSecretRef`, `cohere.authSecretRef`) names a
+secret; Conduit's host resolves it and injects it as the `Authorization` header immediately before
+dispatch. **The processor never sees the raw API key** — this is a property of the underlying
+host-egress capability (`conduit-processor-sdk`'s `egress` package), not something this processor
+opts into. There is no config path for a guest-supplied credential value.
 
 `ollama` has no credential config at all: a local Ollama server takes no API key, so
 `ollamaProvider` never sets `AuthSecretRef` on its `egress.Request`. Reachability instead depends
 on the pipeline's egress allowlist granting the server's `(IP,port)` as an explicit carve-out.
+
+### Input type and vector dimension (Voyage / Cohere)
+
+- **`input_type` is a semantic, not a structural, setting.** Voyage's `voyage.inputType` and
+  Cohere's (required) `cohere.inputType` tell the model whether it's embedding stored **documents**
+  or a **query**. This processor embeds chunks that will be _stored_, so both default to the
+  document side (`document` / `search_document`). Setting the query side on a document-embedding
+  pipeline produces **valid vectors of the right dimension** — nothing errors — but they live in
+  the wrong semantic space and silently degrade retrieval quality. That's why these are explicit,
+  defaulted, validated config keys, not hidden constants. Cohere additionally **requires**
+  `input_type` (its v3 models `400` without it); an invalid value is rejected at startup with a
+  coded `ai.invalid_config` error naming `cohere.inputType`.
+- **Model → embedding dimension must match your pgvector column.** The downstream
+  `conduit-connector-pgvector` destination validates the configured `dimension` against the target
+  `vector(N)` column at startup and refuses to start on mismatch (`ai.vector_dimension_mismatch`) —
+  it never pads or truncates. This processor reports the true dimension it produced in
+  `ai.embedding.dimension` metadata; size your `vector(N)` column to the model's output dimension.
+  Common defaults: OpenAI `text-embedding-3-small` = 1536, `text-embedding-3-large` = 3072; Voyage
+  `voyage-3.5` = 1024, `voyage-3-lite` = 512; Cohere `embed-english-v3.0` / `embed-multilingual-v3.0`
+  = 1024, `embed-*-light-v3.0` = 384. Verify against current provider docs before sizing.
 
 ### Output
 
@@ -333,22 +358,23 @@ merges.** A `.golangci.yml` exclusion scoped to `go.mod` documents this; remove 
 
 ### Slicing note — what's deliberately not in this `ai.embed` slice
 
-- **`voyage`, `cohere` providers.** The `Provider` interface and resolution/ambiguity seam already
-  covers all four; each remaining provider is a `newXProvider(cfg) (Provider, error)` following
-  `embed/openai.go`/`embed/ollama.go`'s shape (hand-rolled JSON, `egress.Do`, `doWithRetry`).
-  Cohere has existing vendored-client precedent elsewhere in the org to mirror
-  (`pkg/plugin/processor/builtin/impl/cohere` in `ConduitIO/conduit`); Voyage has no existing
-  Conduit precedent and needs its request/response shape sourced from Voyage's own API docs.
-- **The chunking processor.** A separate, non-network processor (`Process(records) -> records`,
-  fan-out 1 input record to N output chunk records) — no dependency on the egress capability, can
-  land independently of the remaining providers.
-- **Acceptance tests.** This slice has unit tests against a mocked `Provider`/`egress.HTTPService`
-  seam; a `conduit-connector-sdk`-style acceptance suite (or an equivalent for processors) that
-  exercises a resolved provider end-to-end is a follow-up, gated on having more than one working
-  provider to prove the suite isn't OpenAI-shaped by accident.
+- **Acceptance tests.** _Now in this repo_ (`embed/acceptance_test.go`): a processor-specific
+  contract suite — a provider matrix (openai/voyage/cohere/ollama driven end-to-end against a mock
+  egress) plus a record-shape matrix (raw/structured/tombstone/unresolvable-field) — because
+  `conduit-processor-sdk` ships no generic processor acceptance harness (unlike
+  `conduit-connector-sdk`). A live, API-key-gated smoke tier (`embed/live_test.go`) hits the real
+  vendor endpoints when a key is present and skips otherwise. Still deferred: a **generic SDK
+  processor harness** (`sdk.ProcessorAcceptanceTest`) — a Tier-1 SDK design tracked separately, not
+  coupled here — and a **non-blocking live CI job**; the mock tier is the gate, the live tier is a
+  smoke test.
 - **The bundle end-to-end test.** Postgres CDC → chunk → embed → pgvector, CI-tested with records
   asserted at the vector store (design doc §8/Testing) — depends on the chunking processor and
   `conduit-connector-pgvector`, both out of scope here.
+- **Reduced-dimension / quantized embeddings.** Voyage/Cohere Matryoshka `output_dimension` and
+  `int8`/`binary` dtypes are out of scope; this slice pins float and each model's default
+  dimension (see "Input type and vector dimension" above).
+- **Fuzz targets** for the provider response parsers (`parseIndexedEmbeddings`,
+  `parseCohereResponse`) — a Phase-1 fuzz-gate follow-up, noted, non-blocking.
 - **Metrics/observability wiring** (`conduit_embedding_tokens_total`,
   `conduit_embedding_call_duration_seconds`, design doc §9) — record-level `tokensUsed` metadata
   ships in this slice; the pipeline-level metrics counters are a host/engine-side follow-up.

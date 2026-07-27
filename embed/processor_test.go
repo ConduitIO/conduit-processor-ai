@@ -369,14 +369,28 @@ func TestProcessor_Open_ResolvesRealOpenAIProviderFromConfig(t *testing.T) {
 	is.Equal(p.provider.Name(), ProviderOpenAI)
 }
 
-func TestProcessor_Configure_RejectsUnimplementedProviderEarly(t *testing.T) {
+func TestProcessor_Configure_RejectsUnknownProviderEarly(t *testing.T) {
 	is := is.New(t)
 	p := NewProcessor()
-	err := p.Configure(context.Background(), config.Config{"provider": "cohere"})
+	err := p.Configure(context.Background(), config.Config{"provider": "not-a-provider"})
 	is.True(err != nil)
 	var perr *Error
 	is.True(errors.As(err, &perr))
-	is.Equal(perr.Code, CodeProviderNotImplemented)
+	is.Equal(perr.Code, CodeInvalidConfig) // fail fast at Configure, before Open
+}
+
+// TestProcessor_Configure_AcceptsCohere proves an explicitly-selected cohere
+// provider now passes Configure-time validation (it was rejected as
+// unimplemented in Slice 1). Provider construction itself happens at Open.
+func TestProcessor_Configure_AcceptsCohere(t *testing.T) {
+	is := is.New(t)
+	p := NewProcessor()
+	err := p.Configure(context.Background(), config.Config{
+		"provider":             "cohere",
+		"cohere.authSecretRef": "cohere-key",
+		"model":                "embed-english-v3.0",
+	})
+	is.NoErr(err)
 }
 
 func TestProcessor_Configure_AppliesDefaults(t *testing.T) {

@@ -97,14 +97,49 @@ type Config struct {
 	// with ai.embedding_host_not_allowed (host-side, design doc §1).
 	OpenAIBaseURL string `json:"openai.baseURL" default:"https://api.openai.com"`
 
-	// VoyageAuthSecretRef is the Voyage AI equivalent of
-	// OpenAIAuthSecretRef. Slice 1 wires this into resolution and
-	// ambiguity detection but the "voyage" provider itself is not yet
-	// implemented — see doc.go's Slice 1 scope note.
+	// VoyageAuthSecretRef names the host-managed secret holding the Voyage
+	// AI API key — the Voyage equivalent of OpenAIAuthSecretRef, with the
+	// same host-injection semantics (the raw key never enters guest memory)
+	// and the same auto-detection role (a non-empty value makes "voyage" a
+	// resolution candidate).
 	VoyageAuthSecretRef string `json:"voyage.authSecretRef"`
-	// CohereAuthSecretRef is the Cohere equivalent of OpenAIAuthSecretRef.
-	// Not yet implemented in this slice; see doc.go.
+	// VoyageBaseURL overrides the Voyage API base URL. Must resolve within
+	// the pipeline's host-enforced egress allowlist or every call fails
+	// with ai.embedding_host_not_allowed (host-side, design doc §1).
+	VoyageBaseURL string `json:"voyage.baseURL" default:"https://api.voyageai.com"`
+	// VoyageInputType sets Voyage's input_type request field: "document"
+	// for stored RAG chunks (this processor's job in the canonical
+	// chunk → embed → pgvector pipeline), "query" for query-side embedding.
+	// Setting it improves retrieval quality; an empty value omits the field
+	// (Voyage then embeds without an input-type hint). Mismatching it to the
+	// wrong side of a RAG pipeline produces valid vectors that retrieve
+	// worse — a semantic misconfiguration nothing errors on, which is why it
+	// is an explicit, defaulted key. Default "document".
+	VoyageInputType string `json:"voyage.inputType" default:"document"`
+	// VoyageOutputDtype sets Voyage's output_dtype request field. This slice
+	// pins "float" — the only dtype pgvector's float vector path accepts;
+	// quantized dtypes (int8/binary) are out of scope and unsupported here.
+	VoyageOutputDtype string `json:"voyage.outputDtype" default:"float"`
+
+	// CohereAuthSecretRef names the host-managed secret holding the Cohere
+	// API key — the Cohere equivalent of OpenAIAuthSecretRef, with the same
+	// host-injection semantics and the same auto-detection role.
 	CohereAuthSecretRef string `json:"cohere.authSecretRef"`
+	// CohereBaseURL overrides the Cohere API base URL. Must resolve within
+	// the pipeline's host-enforced egress allowlist or every call fails
+	// with ai.embedding_host_not_allowed (host-side, design doc §1).
+	CohereBaseURL string `json:"cohere.baseURL" default:"https://api.cohere.com"`
+	// CohereInputType sets Cohere's REQUIRED input_type request field
+	// (Cohere's v3 embedding models 400 without it). "search_document" for
+	// stored RAG chunks — this processor's job in the canonical
+	// chunk → embed → pgvector pipeline — "search_query" for the retrieval
+	// path, plus "classification" and "clustering". Validated against that
+	// enum at provider construction. As with Voyage's input_type,
+	// mismatching it to the wrong side of a RAG pipeline silently degrades
+	// retrieval quality (valid vectors, wrong semantic space), which is why
+	// it is an explicit, defaulted, validated key rather than a hardcoded
+	// constant. Default "search_document".
+	CohereInputType string `json:"cohere.inputType" default:"search_document"`
 	// OllamaBaseURL, if set, makes "ollama" an auto-detection candidate
 	// (local Ollama has no API key) and overrides the ollama provider's
 	// default target, "http://localhost:11434" (Ollama's own documented
