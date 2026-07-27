@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build live_embed
+
 // Live, API-key-gated smoke tests. These are NOT the acceptance gate — the
-// mock-egress suite (acceptance_test.go) is. They hit the real vendor
-// endpoints only when the relevant key is present in the environment and skip
-// otherwise, so a default `go test` (and CI, which sets no keys) runs the mock
-// tier and skips these. No key ever appears in code or fixtures — each test
-// reads it from the environment.
+// mock-egress suite (acceptance_test.go) is. They are excluded from a normal
+// build by the `live_embed` build tag AND additionally skip unless the
+// relevant vendor key is present — two gates, so an ambient OPENAI_API_KEY (or
+// similar) in a developer's or CI environment can never hijack a plain
+// `go test ./...` into making a real, paid, network-dependent call. Run them
+// explicitly with `go test -tags live_embed ./embed/...` and the keys set. No
+// key ever appears in code or fixtures — each test reads it from the
+// environment.
 //
 // Because provider auth is normally host-injected via AuthSecretRef (the raw
 // key never enters guest memory), the live transport double below deliberately

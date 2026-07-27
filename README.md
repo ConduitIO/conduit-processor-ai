@@ -362,8 +362,10 @@ merges.** A `.golangci.yml` exclusion scoped to `go.mod` documents this; remove 
   contract suite — a provider matrix (openai/voyage/cohere/ollama driven end-to-end against a mock
   egress) plus a record-shape matrix (raw/structured/tombstone/unresolvable-field) — because
   `conduit-processor-sdk` ships no generic processor acceptance harness (unlike
-  `conduit-connector-sdk`). A live, API-key-gated smoke tier (`embed/live_test.go`) hits the real
-  vendor endpoints when a key is present and skips otherwise. Still deferred: a **generic SDK
+  `conduit-connector-sdk`). A live smoke tier (`embed/live_test.go`) hits the real vendor endpoints,
+  gated behind the `live_embed` build tag AND a per-provider key — run it with
+  `go test -tags live_embed ./embed/...` and the keys set; a plain `go test ./...` never compiles it,
+  so an ambient key can't turn the default run into a real paid call. Still deferred: a **generic SDK
   processor harness** (`sdk.ProcessorAcceptanceTest`) — a Tier-1 SDK design tracked separately, not
   coupled here — and a **non-blocking live CI job**; the mock tier is the gate, the live tier is a
   smoke test.
