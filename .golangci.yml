@@ -113,14 +113,6 @@ linters:
       - linters:
           - goconst
         path: (.+)_test\.go
-      # TEMPORARY: go.mod's replace directive points at a local,
-      # unreleased conduit-processor-sdk checkout (the egress package this
-      # repo needs isn't tagged yet) — see the TODO(bundle-merge) comment
-      # in go.mod. Remove this exclusion in the same change that removes
-      # the replace directive.
-      - linters:
-          - gomoddirectives
-        path: go\.mod
     paths:
       - third_party$
       - builtin$
