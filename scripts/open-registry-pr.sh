@@ -207,6 +207,17 @@ if [ -n "$EXISTING_PR_NUMBER" ]; then
 else
   LABEL_ARGS=()
   if [ "$NEW_NAME_REGISTRATION" = "true" ]; then
+    # Create the label idempotently before using it. gh pr create FAILS outright
+    # on an unknown label, which would abort the publish at its very last step —
+    # after the artifacts are built, signed and uploaded — leaving a released
+    # version with no index entry and a human to reconcile it by hand. A fresh
+    # or renamed registry repo should self-heal instead of ambushing the
+    # release. `|| true` because the only expected failure is "already exists".
+    gh label create "new-processor-registration" \
+      --repo "$INDEX_REPO" \
+      --description "Adds a processor name not previously in the index (needs naming review)" \
+      --color "0E8A16" \
+      --force >/dev/null 2>&1 || true
     LABEL_ARGS+=(--label "new-processor-registration")
   fi
   PR_URL="$(gh pr create --repo "$INDEX_REPO" --title "$PR_TITLE" --body-file "$PR_BODY_FILE" --head "$BRANCH" "${LABEL_ARGS[@]}")"
