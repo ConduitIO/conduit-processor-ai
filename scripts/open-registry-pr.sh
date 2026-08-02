@@ -48,6 +48,27 @@ RELEASED_AT="${RELEASED_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 : "${MIN_CONDUIT_VERSION:?}"
 : "${MIN_PROTOCOL_VERSION:?}"
 : "${PROVENANCE_BUNDLE_URL:?}"
+
+# Read the predicateType out of the attestation we actually published rather
+# than hardcoding one. The v0.1.0 entry initially claimed
+# https://slsa.dev/provenance/v1 while slsa-github-generator had emitted v0.2 —
+# harmless today (the installer reads the statement's own predicateType, not the
+# index's copy) but a signed index must not assert something false, and any
+# constant here goes stale the moment the generator bumps its predicate.
+PREDICATE_TYPE="$(
+  curl -sSL --fail --max-time 60 "$PROVENANCE_BUNDLE_URL" |
+    head -n 1 |
+    jq -r '(.dsseEnvelope.payload // .payload)' |
+    base64 -d |
+    jq -r '.predicateType'
+)"
+case "$PREDICATE_TYPE" in
+  https://slsa.dev/provenance/v*) ;;
+  *)
+    echo "::error::could not read a SLSA predicateType from ${PROVENANCE_BUNDLE_URL} (got '${PREDICATE_TYPE}')" >&2
+    exit 1
+    ;;
+esac
 : "${INDEX_REPO:?}"
 : "${GH_TOKEN:?GH_TOKEN (index-repo-token) is required to open a PR}"
 : "${GITHUB_REPOSITORY:?}"
@@ -116,6 +137,7 @@ for i in $(seq 0 $((COUNT - 1))); do
     --arg minc "$MIN_CONDUIT_VERSION" --arg minp "$MIN_PROTOCOL_VERSION" \
     --arg url "$URL" --arg sha "$SHA" --argjson size "$SIZE" \
     --arg sigurl "$SIGURL" --arg provurl "$PROVENANCE_BUNDLE_URL" \
+    --arg predtype "$PREDICATE_TYPE" \
     '{
       version: $version, releasedAt: $releasedAt,
       minConduitVersion: $minc, minProtocolVersion: $minp,
@@ -124,7 +146,7 @@ for i in $(seq 0 $((COUNT - 1))); do
         url: $url, sha256: $sha, size: $size,
         signature: { bundleURL: $sigurl }
       },
-      slsaProvenance: { bundleURL: $provurl, predicateType: "https://slsa.dev/provenance/v1" },
+      slsaProvenance: { bundleURL: $provurl, predicateType: $predtype },
       deprecated: false
     }')"
 
