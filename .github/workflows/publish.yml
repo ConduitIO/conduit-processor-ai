@@ -79,6 +79,12 @@ jobs:
       - name: Build, stamp, package, cosign-sign the two WASM processors
         id: publish
         env:
+          # build-sign-processors.sh uploads the signed assets with
+          # `gh release upload`, so it needs a token like every other gh call.
+          # Without it the script dies AFTER building, packaging and
+          # cosign-signing (a real, immutable tlog entry is already published by
+          # then) — the most expensive possible place to fail.
+          GH_TOKEN: ${{ github.token }}
           VERSION_TAG: ${{ github.ref_name }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: ./scripts/build-sign-processors.sh
