@@ -22,6 +22,7 @@ import (
 
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
+	"github.com/conduitio/conduit-processor-ai/internal/version"
 	sdk "github.com/conduitio/conduit-processor-sdk"
 )
 
@@ -75,7 +76,7 @@ func (p *Processor) Specification() (sdk.Specification, error) {
 			"vector to outputField along with provider/model/dimension/tokensUsed metadata. " +
 			"Sub-batches records within a single Process call only — see the package README's delivery-semantics " +
 			"note for what happens on partial and full batch failure.",
-		Version:    "v0.1.0-slice1",
+		Version:    version.Value,
 		Author:     "Meroxa, Inc.",
 		Parameters: Config{}.Parameters(),
 	}, nil

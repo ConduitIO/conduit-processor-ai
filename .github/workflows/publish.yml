@@ -1,0 +1,133 @@
+# Publish workflow for conduit-processor-ai.
+#
+# Publishes the two standalone WASM processors in this module — ai.chunk (from
+# cmd/chunking) and ai.embed (from cmd/embedding) — as SIGNED, provenance-backed
+# artifacts registered in the Conduit connector registry, so that on a stock
+# conduit that ships `processor-plugins install`, `conduit processor-plugins
+# install ai.chunk` / `... ai.embed` works with no `--allow-unsigned`, no
+# `--bundle`.
+#
+# This mirrors the connector publish flow (ConduitIO/conduit-connector-file's
+# publish.yml, wrapping ConduitIO/connector-publish-action) but is bespoke: that
+# action's name input forbids dots, builds a per-(os,arch) host matrix emitting
+# an `artifacts[]` list, and writes `connectors[]` entries via a Go binary that
+# has no processor awareness — none of which fits a single arch-neutral WASM
+# processor that resolves under a DOTTED name and needs a single-`artifact`
+# `processors[]` entry (see the bootstrap plan, OQ-C / E1).
+#
+# Three jobs, exactly like the connector flow:
+#   build      — build+stamp+package+cosign-sign each .wasm, upload release assets,
+#                emit the artifacts JSON + SLSA subjects. (this repo's OIDC identity
+#                is what becomes the pinned publisher.expectedIdentityPattern on
+#                first registration — hence a composite/inline job, never a reusable
+#                workflow that would sign as the generator's identity)
+#   provenance — SLSA L3 generic generator (isolated reusable workflow, its own
+#                OIDC identity == builder.id)
+#   register   — open/update the index-repo PR writing the two processors[] entries
+#
+# Naming + version contract (the two things that block install resolution):
+#   * NAME: the registry entry name, the WASM's Specification().Name, and the
+#     install argument are all the SAME dotted id (ai.chunk / ai.embed). conduit's
+#     findProcessor exact-matches the install arg against processors[].Name, and
+#     validateProcessorWASM refuses a .wasm whose spec name disagrees.
+#   * VERSION: the .wasm is stamped with the leading-v tag (SDK convention); the
+#     index entry carries the same semver WITHOUT the leading v (schema forbids
+#     it); conduit's NormalizeVersion reconciles them. A plain (unstamped) build
+#     reports "(devel)" and would install but lose version integrity — the build
+#     job fails closed if the stamp did not land.
+
+name: publish
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write   # upload release assets
+  id-token: write   # cosign keyless OIDC + SLSA provenance OIDC
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      artifacts: ${{ steps.publish.outputs.artifacts }}
+      hashes: ${{ steps.publish.outputs.provenance-subjects }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # The build step uploads signed assets with `gh release upload` (no
+      # create), so the release must exist first. Idempotent: `|| true` on the
+      # already-exists race; --generate-notes gives reasonable notes.
+      - name: Ensure the release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "$TAG" --generate-notes \
+            || echo "release $TAG already exists — nothing to create"
+
+      - name: Build, stamp, package, cosign-sign the two WASM processors
+        id: publish
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/build-sign-processors.sh
+
+  provenance:
+    needs: build
+    permissions:
+      actions: read     # generator reads the build job's workflow run
+      id-token: write   # its own OIDC identity — THIS becomes builder.id
+      contents: write   # uploads the provenance attestation as a release asset
+    # Pinned to the ref that IS conduit's pkg/registry/trust.ExpectedBuilderID —
+    # the SAME ref the connector flow pins (conduit-connector-file publish.yml).
+    # If conduit's expected builder id ever moves, this ref must move in lockstep
+    # or provenance verification fails at install. (See OQ-C: the connector action
+    # guards this with a generator_ref_test; the processor flow should add the
+    # equivalent guard once a home for it exists.)
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.build.outputs.hashes }}
+      upload-assets: true
+
+  register:
+    needs: [build, provenance]
+    permissions:
+      contents: read
+      id-token: write   # this job's own cosign identity must resolve the same as build's
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open/update the registry PR (two processors[] entries)
+        env:
+          ARTIFACTS: ${{ needs.build.outputs.artifacts }}
+          VERSION_TAG: ${{ github.ref_name }}
+          # RELEASED_AT is generated in-runner by the script (a tag push has no
+          # reliable head_commit; event payload fields are untrusted input).
+          # 0.20.0: the first conduit that ships `processor-plugins install`.
+          # NOT 0.19.0 (which has the anchors but not the install verb).
+          MIN_CONDUIT_VERSION: '0.20.0'
+          # conduit-processor-sdk/protocol floor — confirm against go.mod on a bump.
+          MIN_PROTOCOL_VERSION: '0.14.0'
+          PROVENANCE_BUNDLE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ needs.provenance.outputs.provenance-name }}
+          INDEX_REPO: ConduitIO/conduit-connector-registry
+          GH_TOKEN: ${{ secrets.REGISTRY_INDEX_PR_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          # First-registration only — a human-authored, tag-scoped identity
+          # fragment (already regex-escaped). A maintainer consciously scopes
+          # trust to tags; never auto-derived from the current ref. Ignored by
+          # the register script once the name already exists.
+          FIRST_REG_IDENTITY_PATTERN: 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+'
+        run: ./scripts/open-registry-pr.sh

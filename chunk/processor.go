@@ -23,6 +23,7 @@ import (
 
 	"github.com/conduitio/conduit-commons/config"
 	"github.com/conduitio/conduit-commons/opencdc"
+	"github.com/conduitio/conduit-processor-ai/internal/version"
 	sdk "github.com/conduitio/conduit-processor-sdk"
 )
 
@@ -82,7 +83,7 @@ func (p *Processor) Specification() (sdk.Specification, error) {
 			"never chunked — it is re-emitted unchanged, tagged with the source record's key, as a delete-intent " +
 			"for the vector destination to resolve into per-chunk deletes. See the package README's delivery-" +
 			"semantics and metadata-contract sections.",
-		Version:    "v0.1.0-slice1",
+		Version:    version.Value,
 		Author:     "Meroxa, Inc.",
 		Parameters: Config{}.Parameters(),
 	}, nil
