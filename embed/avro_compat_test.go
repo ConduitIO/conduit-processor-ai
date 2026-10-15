@@ -31,6 +31,12 @@ package embed
 //   - every output record (key, payload, metadata) and the schema text the
 //     encode middleware registered for it, or the error string.
 //
+// Besides valid values, hand-built malformed payloads (malformedPayloads)
+// pin how each codec rejects, or silently accepts, bad input. Every case
+// runs twice: with time.Local at UTC and at UTC-7 (the "@UTC-7" copies).
+// Differences found between the codecs are pinned in knownCodecChanges and
+// silentMalformedDecodes, never hidden.
+//
 // On the new codec the test feeds the frozen hamba bytes through the same
 // chain and requires identical results, and re-encodes the same Go values
 // to check the new codec writes identical bytes. Invariant 6: records
@@ -46,6 +52,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -89,6 +96,12 @@ type avroCompatCase struct {
 	text          string
 	operation     opencdc.Operation
 	processorConf map[string]string
+	// rawPayloadHex, when set, is fed to the chain as the payload instead of
+	// an encoding of value: a hand-built malformed input.
+	rawPayloadHex string
+	raw           bool
+	// zone is time.Local while the case encodes and runs; nil means UTC.
+	zone *time.Location
 }
 
 const avroCompatKeySchema = `{"type":"record","name":"Key","fields":[` +
@@ -98,8 +111,8 @@ const avroCompatKeySchema = `{"type":"record","name":"Key","fields":[` +
 // instead of hiding: the frozen hamba output must contain old, and the
 // current output must equal the frozen output with old replaced by new.
 type knownCodecChange struct {
-	old, new string
-	why      string
+	pairs [][2]string // {old, new}
+	why   string
 }
 
 // emptyArrayChange: hamba v2.28.0 decodes an empty Avro array to a nil []any;
@@ -109,18 +122,34 @@ type knownCodecChange struct {
 // different Go value. Neither processor reads these fields; a processor or
 // destination that serializes the value (JSON null vs []) would see it.
 var emptyArrayChange = knownCodecChange{
-	old: "[]any(nil)", new: "[]any{}",
-	why: "empty Avro array decodes to []any{} instead of nil",
+	pairs: [][2]string{{"[]any(nil)", "[]any{}"}},
+	why:   "empty Avro array decodes to []any{} instead of nil",
 }
 
-// knownCodecChanges maps a case name (without the processor prefix) to the
-// change it pins.
+// Error wording: iskorotkov/avro renamed the reader functions that appear in
+// its error text. The failure and the rest of the message are the same.
+var (
+	readBytesWording = knownCodecChange{
+		pairs: [][2]string{{"avro: ReadBYTES:", "avro: ReadBytes:"}},
+		why:   "error text says ReadBytes instead of ReadBYTES",
+	}
+	readStringWording = knownCodecChange{
+		pairs: [][2]string{{"avro: ReadSTRING:", "avro: ReadString:"}},
+		why:   "error text says ReadString instead of ReadSTRING",
+	}
+)
+
+// knownCodecChanges maps a case name (without the processor prefix and the
+// zone suffix) to the change it pins.
 var knownCodecChanges = map[string]knownCodecChange{
-	"array_empty":           emptyArrayChange,
-	"array_empty_in_record": emptyArrayChange,
-	"nullable_array_empty":  emptyArrayChange,
-	"map_of_empty_array":    emptyArrayChange,
-	"array_of_empty_array":  emptyArrayChange,
+	"malformed_negative_bytes_length":  readBytesWording,
+	"malformed_huge_bytes_length":      readBytesWording,
+	"malformed_negative_string_length": readStringWording,
+	"array_empty":                      emptyArrayChange,
+	"array_empty_in_record":            emptyArrayChange,
+	"nullable_array_empty":             emptyArrayChange,
+	"map_of_empty_array":               emptyArrayChange,
+	"array_of_empty_array":             emptyArrayChange,
 }
 
 func avroCompatCases() []avroCompatCase {
@@ -189,7 +218,7 @@ func avroCompatCases() []avroCompatCase {
 		{"nullable_timestamp", `["null",{"type":"long","logicalType":"timestamp-micros"}]`, ts.Truncate(time.Microsecond)},
 	}
 
-	cases := make([]avroCompatCase, 0, (len(fields)+3)*2+2)
+	cases := make([]avroCompatCase, 0, 2*((len(fields)+3)*2+2+2*len(malformedPayloads())))
 	for _, proc := range []string{"chunk", "embed"} {
 		for _, f := range fields {
 			cases = append(cases, avroCompatCase{
@@ -238,7 +267,95 @@ func avroCompatCases() []avroCompatCase {
 			processorConf: map[string]string{"inputField": ".Payload.After.v"},
 		},
 	)
+	for _, proc := range []string{"chunk", "embed"} {
+		for _, m := range malformedPayloads() {
+			cases = append(cases, avroCompatCase{
+				name: proc + "/malformed_" + m.name, processor: proc,
+				fieldSchema: m.schema, rawPayloadHex: m.hex, raw: true,
+				keySchema: avroCompatKeySchema, key: key,
+				operation: opencdc.OperationCreate,
+			})
+		}
+	}
+
+	// Every case runs a second time with a non-UTC local zone, so values
+	// that the codecs read or write relative to time.Local are compared
+	// under an offset too.
+	utcMinus7 := time.FixedZone("UTC-7", -7*3600)
+	n := len(cases)
+	for _, c := range cases[:n] {
+		c.name += "@UTC-7"
+		c.zone = utcMinus7
+		cases = append(cases, c)
+	}
 	return cases
+}
+
+// malformedPayload is a hand-built payload for record Doc{text string, v T}
+// (or Doc{text string} when schema is empty). Every one starts with the
+// valid text "hi" (046869) unless noted.
+type malformedPayload struct {
+	name, schema, hex string
+}
+
+func malformedPayloads() []malformedPayload {
+	return []malformedPayload{
+		{"truncated_text", "", "0a6869"},                                                     // text claims 5 bytes, has 2
+		{"truncated_string", `"string"`, "0468690aab"},                                       // v claims 5 bytes, has 1
+		{"truncated_after_text", `"long"`, "046869"},                                         // v missing
+		{"bad_union_index", `["null","string"]`, "04686904046162"},                           // branch 2 of 2
+		{"negative_union_index", `["null","string"]`, "04686901"},                            // branch -1
+		{"bad_enum_index", `{"type":"enum","name":"E","symbols":["A","B","C"]}`, "0468690a"}, // symbol 5 of 3
+		{"negative_enum_index", `{"type":"enum","name":"E2","symbols":["A"]}`, "04686901"},
+		{"negative_bytes_length", `"bytes"`, "04686903"},       // length -2
+		{"negative_string_length", `"string"`, "04686903"},     // length -2
+		{"huge_bytes_length", `"bytes"`, "046869808080808040"}, // length 2^40, no bytes
+		{"negative_array_count_no_size", `{"type":"array","items":"long"}`, "04686901"},
+		{"negative_array_count_huge", `{"type":"array","items":"long"}`, "046869ff887a00"}, // -1e6 items, block size 0
+		{"array_claims_1m_items", `{"type":"array","items":"long"}`, "04686980897a"},
+		{"map_claims_1m_entries", `{"type":"map","values":"string"}`, "04686980897a"},
+		{"trailing_garbage", `"string"`, "046869046162ffff"}, // valid record, then 2 extra bytes
+		{"empty_payload", "", ""},                            // record{text string}, zero bytes
+		{"bad_boolean", `"boolean"`, "04686902"},             // boolean byte 0x02
+	}
+}
+
+// silentMalformedDecodes are malformed inputs that both codecs decode
+// WITHOUT an error: reading past the end of the input yields nil for the
+// missing field (even for a non-nullable long or a whole record), a block
+// count with no items yields nil, and trailing bytes are ignored. The
+// processor then runs on the mangled value. This is pinned, not endorsed:
+// the decoder in conduit-commons should reject these (issue filed by the
+// coordinating lane). If a codec starts rejecting one, this test fails and
+// the entry must be removed deliberately.
+var silentMalformedDecodes = map[string]string{
+	"malformed_truncated_after_text":         "missing field decodes as nil",
+	"malformed_negative_array_count_no_size": "block count with no size decodes as nil",
+	"malformed_negative_array_count_huge":    "1,000,000-item negative block with no items decodes as nil",
+	"malformed_array_claims_1m_items":        "1,000,000-item array header with no items decodes as nil",
+	"malformed_map_claims_1m_entries":        "1,000,000-entry map header with no entries decodes as nil",
+	"malformed_trailing_garbage":             "trailing bytes after a complete record are ignored",
+	"malformed_empty_payload":                "zero bytes decode as a record with a nil field",
+}
+
+// avroCompatBaseName strips the processor prefix and the zone suffix.
+func avroCompatBaseName(name string) string {
+	_, base, _ := strings.Cut(name, "/")
+	base, _, _ = strings.Cut(base, "@")
+	return base
+}
+
+// withAvroCompatZone runs fn with time.Local set to the case's zone (UTC by
+// default). No test in this package runs in parallel.
+func withAvroCompatZone(c avroCompatCase, fn func()) {
+	zone := c.zone
+	if zone == nil {
+		zone = time.UTC
+	}
+	prev := time.Local                   //nolint:gosmopolitan // pinning the zone is the point
+	time.Local = zone                    //nolint:gosmopolitan // see above
+	defer func() { time.Local = prev }() //nolint:gosmopolitan // restore
+	fn()
 }
 
 func (c avroCompatCase) payloadSchema() string {
@@ -382,7 +499,7 @@ func runAvroCompatCase(t *testing.T, c avroCompatCase, keyBytes, payloadBytes []
 				got.Outputs = append(got.Outputs, fmt.Sprintf("%d.%d %s", i, j, renderRecord(ctx, t, r)))
 			}
 		case sdk.ErrorRecord:
-			got.Outputs = append(got.Outputs, fmt.Sprintf("%d error %s", i, pr.Error.Error()))
+			got.Outputs = append(got.Outputs, fmt.Sprintf("%d error %s", i, normalizeSchemaIDs(pr.Error.Error())))
 		case sdk.FilterRecord:
 			got.Outputs = append(got.Outputs, fmt.Sprintf("%d filter", i))
 		default:
@@ -390,6 +507,14 @@ func runAvroCompatCase(t *testing.T, c avroCompatCase, keyBytes, payloadBytes []
 		}
 	}
 	return got
+}
+
+// schemaIDPattern matches the registry ID in commons error text. IDs come
+// from a process-wide counter, so they depend on which cases ran before.
+var schemaIDPattern = regexp.MustCompile(`\(id: [0-9]+\)`)
+
+func normalizeSchemaIDs(s string) string {
+	return schemaIDPattern.ReplaceAllString(s, "(id: N)")
 }
 
 func renderRecord(ctx context.Context, t *testing.T, r opencdc.Record) string {
@@ -544,6 +669,13 @@ func encodeAvroCompatInputs(c avroCompatCase) (keyBytes, payloadBytes []byte, en
 	if err != nil {
 		return nil, nil, "key: " + err.Error()
 	}
+	if c.raw {
+		pb, err := hex.DecodeString(c.rawPayloadHex)
+		if err != nil {
+			panic(err) // a typo in a hand-built case
+		}
+		return kb, pb, ""
+	}
 	pb, err := paySch.Marshal(c.payloadValue())
 	if err != nil {
 		return nil, nil, "payload: " + err.Error()
@@ -562,15 +694,17 @@ func generateAvroCompatFixtures(t *testing.T, cases []avroCompatCase) {
 	}
 	all := make([]avroCompatFixture, 0, len(cases))
 	for _, c := range cases {
-		kb, pb, encErr := encodeAvroCompatInputs(c)
-		if encErr != "" {
-			all = append(all, avroCompatFixture{
-				Name: c.name, Processor: c.processor, KeySchema: c.keySchema,
-				PayloadSchema: c.payloadSchema(), EncodeError: encErr,
-			})
-			continue
-		}
-		all = append(all, runAvroCompatCase(t, c, kb, pb))
+		withAvroCompatZone(c, func() {
+			kb, pb, encErr := encodeAvroCompatInputs(c)
+			if encErr != "" {
+				all = append(all, avroCompatFixture{
+					Name: c.name, Processor: c.processor, KeySchema: c.keySchema,
+					PayloadSchema: c.payloadSchema(), EncodeError: encErr,
+				})
+				return
+			}
+			all = append(all, runAvroCompatCase(t, c, kb, pb))
+		})
 	}
 	b, err := json.MarshalIndent(all, "", "  ")
 	if err != nil {
@@ -587,13 +721,9 @@ func generateAvroCompatFixtures(t *testing.T, cases []avroCompatCase) {
 
 func TestAvroCodecCompat(t *testing.T) {
 	// local-timestamp-* values are written and read relative to time.Local on
-	// both codecs, so the bytes depend on the machine's zone. Pin UTC (a wasip1
-	// build runs with a zero offset as well). No test in this package
-	// runs in parallel, so swapping the global is safe here.
-	local := time.Local                      //nolint:gosmopolitan // pinning the zone is the point
-	time.Local = time.UTC                    //nolint:gosmopolitan // see above
-	t.Cleanup(func() { time.Local = local }) //nolint:gosmopolitan // restore
-
+	// both codecs, so the bytes depend on the machine's zone. Each case pins
+	// it (withAvroCompatZone): UTC, which a wasip1 build also runs with, and
+	// again UTC-7 for the "@UTC-7" copies.
 	cases := avroCompatCases()
 
 	if os.Getenv(avroCompatGenEnv) == "1" {
@@ -625,68 +755,88 @@ func TestAvroCodecCompat(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			want, ok := byName[c.name]
-			if !ok {
-				t.Fatalf("no frozen fixture for %q", c.name)
-			}
-			if want.KeySchema != c.keySchema || want.PayloadSchema != c.payloadSchema() {
-				t.Fatalf("case schemas changed since the fixtures were frozen")
-			}
-
-			// Encode: the new codec writes the bytes hamba wrote.
-			kb, pb, encErr := encodeAvroCompatInputs(c)
-			if encErr != want.EncodeError {
-				t.Fatalf("encode error differs:\n got %q\nwant %q", encErr, want.EncodeError)
-			}
-			if encErr != "" {
-				return // rejected identically; there are no bytes to decode
-			}
-			if got := hex.EncodeToString(kb); got != want.KeyHex {
-				t.Errorf("key bytes differ:\n got %s\nwant %s", got, want.KeyHex)
-			}
-			if got := hex.EncodeToString(pb); got != want.PayloadHex {
-				paySch := schema.Schema{Type: schema.TypeAvro, Bytes: []byte(c.payloadSchema())}
-				wantBytes, err := hex.DecodeString(want.PayloadHex)
-				if err != nil {
-					t.Fatal(err)
-				}
-				// Only map entry order may differ, see hasAvroMap.
-				if !hasAvroMap(c.payloadSchema()) ||
-					renderOrderFree(paySch, pb) != renderOrderFree(paySch, wantBytes) {
-					t.Errorf("payload bytes differ:\n got %s\nwant %s", got, want.PayloadHex)
-				}
-			}
-
-			// Decode and re-encode: hamba-written bytes through the real
-			// middleware chain give the same decoded values and outputs.
-			wantKey, err := hex.DecodeString(want.KeyHex)
-			if err != nil {
-				t.Fatal(err)
-			}
-			wantPayload, err := hex.DecodeString(want.PayloadHex)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := runAvroCompatCase(t, c, wantKey, wantPayload)
-			wantSeen, wantOutputs := want.Seen, want.Outputs
-			_, base, _ := strings.Cut(c.name, "/")
-			if kc, ok := knownCodecChanges[base]; ok {
-				// Pin both sides: hamba's value is in the frozen fixture,
-				// the new codec's value in this run.
-				if !strings.Contains(strings.Join(want.Seen, "\n"), kc.old) {
-					t.Fatalf("known change %q: frozen fixture no longer shows %s", kc.why, kc.old)
-				}
-				if strings.Contains(strings.Join(got.Seen, "\n")+strings.Join(got.Outputs, "\n"), kc.old) {
-					t.Fatalf("known change %q: current codec still produces %s", kc.why, kc.old)
-				}
-				wantSeen = replaceAll(want.Seen, kc.old, kc.new)
-				wantOutputs = replaceAll(want.Outputs, kc.old, kc.new)
-				t.Logf("known codec change pinned: %s", kc.why)
-			}
-			compareLines(t, "seen by processor", got.Seen, wantSeen)
-			compareLines(t, "outputs", got.Outputs, wantOutputs)
+			withAvroCompatZone(c, func() { compareAvroCompatCase(t, c, byName) })
 		})
 	}
+}
+
+func compareAvroCompatCase(t *testing.T, c avroCompatCase, byName map[string]avroCompatFixture) {
+	t.Helper()
+	want, ok := byName[c.name]
+	if !ok {
+		t.Fatalf("no frozen fixture for %q", c.name)
+	}
+	if want.KeySchema != c.keySchema || want.PayloadSchema != c.payloadSchema() {
+		t.Fatalf("case schemas changed since the fixtures were frozen")
+	}
+
+	// Encode: the new codec writes the bytes hamba wrote.
+	kb, pb, encErr := encodeAvroCompatInputs(c)
+	if encErr != want.EncodeError {
+		t.Fatalf("encode error differs:\n got %q\nwant %q", encErr, want.EncodeError)
+	}
+	if encErr != "" {
+		return // rejected identically; there are no bytes to decode
+	}
+	if got := hex.EncodeToString(kb); got != want.KeyHex {
+		t.Errorf("key bytes differ:\n got %s\nwant %s", got, want.KeyHex)
+	}
+	if got := hex.EncodeToString(pb); got != want.PayloadHex {
+		paySch := schema.Schema{Type: schema.TypeAvro, Bytes: []byte(c.payloadSchema())}
+		wantBytes, err := hex.DecodeString(want.PayloadHex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Only map entry order may differ, see hasAvroMap.
+		if !hasAvroMap(c.payloadSchema()) ||
+			renderOrderFree(paySch, pb) != renderOrderFree(paySch, wantBytes) {
+			t.Errorf("payload bytes differ:\n got %s\nwant %s", got, want.PayloadHex)
+		}
+	}
+
+	// Decode and re-encode: hamba-written bytes through the real
+	// middleware chain give the same decoded values and outputs.
+	wantKey, err := hex.DecodeString(want.KeyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPayload, err := hex.DecodeString(want.PayloadHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runAvroCompatCase(t, c, wantKey, wantPayload)
+	wantSeen, wantOutputs := want.Seen, want.Outputs
+	if why, ok := silentMalformedDecodes[avroCompatBaseName(c.name)]; ok {
+		// Pin that neither codec rejects this input at decode time.
+		for _, side := range []struct {
+			name string
+			seen []string
+		}{{"frozen hamba fixture", want.Seen}, {"current codec", got.Seen}} {
+			if len(side.seen) != 1 {
+				t.Errorf("silent decode %q: %s did not decode the input (processor saw %d records)",
+					why, side.name, len(side.seen))
+			}
+		}
+	}
+	if kc, ok := knownCodecChanges[avroCompatBaseName(c.name)]; ok {
+		// Pin both sides: hamba's value is in the frozen fixture,
+		// the new codec's value in this run.
+		frozen := strings.Join(want.Seen, "\n") + "\n" + strings.Join(want.Outputs, "\n")
+		current := strings.Join(got.Seen, "\n") + "\n" + strings.Join(got.Outputs, "\n")
+		for _, pair := range kc.pairs {
+			if !strings.Contains(frozen, pair[0]) {
+				t.Fatalf("known change %q: frozen fixture no longer shows %q", kc.why, pair[0])
+			}
+			if strings.Contains(current, pair[0]) {
+				t.Fatalf("known change %q: current codec still produces %q", kc.why, pair[0])
+			}
+			wantSeen = replaceAll(wantSeen, pair[0], pair[1])
+			wantOutputs = replaceAll(wantOutputs, pair[0], pair[1])
+		}
+		t.Logf("known codec change pinned: %s", kc.why)
+	}
+	compareLines(t, "seen by processor", got.Seen, wantSeen)
+	compareLines(t, "outputs", got.Outputs, wantOutputs)
 }
 
 func replaceAll(lines []string, old, repl string) []string {
