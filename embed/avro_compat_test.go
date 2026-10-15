@@ -325,9 +325,9 @@ func malformedPayloads() []malformedPayload {
 // missing field (even for a non-nullable long or a whole record), a block
 // count with no items yields nil, and trailing bytes are ignored. The
 // processor then runs on the mangled value. This is pinned, not endorsed:
-// the decoder in conduit-commons should reject these (issue filed by the
-// coordinating lane). If a codec starts rejecting one, this test fails and
-// the entry must be removed deliberately.
+// the decoder in conduit-commons should reject these
+// (ConduitIO/conduit-commons#304). If a codec starts rejecting one, this
+// test fails and the entry must be removed deliberately.
 var silentMalformedDecodes = map[string]string{
 	"malformed_truncated_after_text":         "missing field decodes as nil",
 	"malformed_negative_array_count_no_size": "block count with no size decodes as nil",
