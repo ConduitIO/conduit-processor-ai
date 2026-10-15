@@ -586,9 +586,9 @@
     "keySchema": "{\"type\":\"record\",\"name\":\"Key\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"shard\",\"type\":\"long\"}]}",
     "payloadSchema": "{\"type\":\"record\",\"name\":\"Doc\",\"namespace\":\"compat\",\"fields\":[{\"name\":\"text\",\"type\":\"string\"},{\"name\":\"v\",\"type\":{\"type\":\"long\",\"logicalType\":\"local-timestamp-millis\"}}]}",
     "keyHex": "0a646f632d310e",
-    "payloadHex": "3868656c6c6f206176726f20636f646563206571756976616c656e6365aadcc08ea768",
+    "payloadHex": "3868656c6c6f206176726f20636f646563206571756976616c656e6365aaf2c4a6a768",
     "seen": [
-      "key=structured:map[string]any{\"id\":string(\"doc-1\"),\"shard\":int64(7)} before=nil after=structured:map[string]any{\"text\":string(\"hello avro codec equivalence\"),\"v\":time.Time(2026-10-14T05:34:56.789-07:00 loc=Local)}"
+      "key=structured:map[string]any{\"id\":string(\"doc-1\"),\"shard\":int64(7)} before=nil after=structured:map[string]any{\"text\":string(\"hello avro codec equivalence\"),\"v\":time.Time(2026-10-14T12:34:56.789Z loc=UTC)}"
     ],
     "outputs": [
       "0 multi len=5",
@@ -605,9 +605,9 @@
     "keySchema": "{\"type\":\"record\",\"name\":\"Key\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"shard\",\"type\":\"long\"}]}",
     "payloadSchema": "{\"type\":\"record\",\"name\":\"Doc\",\"namespace\":\"compat\",\"fields\":[{\"name\":\"text\",\"type\":\"string\"},{\"name\":\"v\",\"type\":{\"type\":\"long\",\"logicalType\":\"local-timestamp-micros\"}}]}",
     "keyHex": "0a646f632d310e",
-    "payloadHex": "3868656c6c6f206176726f20636f646563206571756976616c656e636586aad1a9c9f1ae06",
+    "payloadHex": "3868656c6c6f206176726f20636f646563206571756976616c656e6365869a9d8a85f3ae06",
     "seen": [
-      "key=structured:map[string]any{\"id\":string(\"doc-1\"),\"shard\":int64(7)} before=nil after=structured:map[string]any{\"text\":string(\"hello avro codec equivalence\"),\"v\":time.Time(2026-10-14T05:34:56.789123-07:00 loc=Local)}"
+      "key=structured:map[string]any{\"id\":string(\"doc-1\"),\"shard\":int64(7)} before=nil after=structured:map[string]any{\"text\":string(\"hello avro codec equivalence\"),\"v\":time.Time(2026-10-14T12:34:56.789123Z loc=UTC)}"
     ],
     "outputs": [
       "0 multi len=5",
@@ -1175,9 +1175,9 @@
     "keySchema": "{\"type\":\"record\",\"name\":\"Key\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"shard\",\"type\":\"long\"}]}",
     "payloadSchema": "{\"type\":\"record\",\"name\":\"Doc\",\"namespace\":\"compat\",\"fields\":[{\"name\":\"text\",\"type\":\"string\"},{\"name\":\"v\",\"type\":{\"type\":\"long\",\"logicalType\":\"local-timestamp-millis\"}}]}",
     "keyHex": "0a646f632d310e",
-    "payloadHex": "3868656c6c6f206176726f20636f646563206571756976616c656e6365aadcc08ea768",
+    "payloadHex": "3868656c6c6f206176726f20636f646563206571756976616c656e6365aaf2c4a6a768",
     "seen": [
-      "key=structured:map[string]any{\"id\":string(\"doc-1\"),\"shard\":int64(7)} before=nil after=structured:map[string]any{\"text\":string(\"hello avro codec equivalence\"),\"v\":time.Time(2026-10-14T05:34:56.789-07:00 loc=Local)}"
+      "key=structured:map[string]any{\"id\":string(\"doc-1\"),\"shard\":int64(7)} before=nil after=structured:map[string]any{\"text\":string(\"hello avro codec equivalence\"),\"v\":time.Time(2026-10-14T12:34:56.789Z loc=UTC)}"
     ],
     "outputs": [
       "0 single op=create pos=pos-1 key=raw:0a646f632d310e before=nil after=raw:3868656c6c6f206176726f20636f646563206571756976616c656e636590989d8a85f3ae06053600000000000000e03f00000000000000d0bf000000000000003c4000 md[ai.embedding.dimension]=\"3\" md[ai.embedding.model]=\"fake-model\" md[ai.embedding.provider]=\"fake\" md[ai.embedding.tokensUsed]=\"11\" md[ai.embedding.tokensUsedScope]=\"batch\" md[compat.case]=\"embed/local_timestamp_millis\" md[opencdc.key.schema.subject]=\"compat.embed.local_timestamp_millis.key\" md[opencdc.key.schema.version]=\"2\" md[opencdc.payload.schema.subject]=\"compat.embed.local_timestamp_millis.payload\" md[opencdc.payload.schema.version]=\"2\" keySchema=avro:{\"name\":\"record\",\"type\":\"record\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"shard\",\"type\":\"long\"}]} payloadSchema=avro:{\"name\":\"record\",\"type\":\"record\",\"fields\":[{\"name\":\"text\",\"type\":\"string\"},{\"name\":\"v\",\"type\":{\"type\":\"long\",\"logicalType\":\"timestamp-micros\"}},{\"name\":\"vector\",\"type\":{\"type\":\"array\",\"items\":[\"double\",\"null\"]}}]}"
@@ -1189,9 +1189,9 @@
     "keySchema": "{\"type\":\"record\",\"name\":\"Key\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"shard\",\"type\":\"long\"}]}",
     "payloadSchema": "{\"type\":\"record\",\"name\":\"Doc\",\"namespace\":\"compat\",\"fields\":[{\"name\":\"text\",\"type\":\"string\"},{\"name\":\"v\",\"type\":{\"type\":\"long\",\"logicalType\":\"local-timestamp-micros\"}}]}",
     "keyHex": "0a646f632d310e",
-    "payloadHex": "3868656c6c6f206176726f20636f646563206571756976616c656e636586aad1a9c9f1ae06",
+    "payloadHex": "3868656c6c6f206176726f20636f646563206571756976616c656e6365869a9d8a85f3ae06",
     "seen": [
-      "key=structured:map[string]any{\"id\":string(\"doc-1\"),\"shard\":int64(7)} before=nil after=structured:map[string]any{\"text\":string(\"hello avro codec equivalence\"),\"v\":time.Time(2026-10-14T05:34:56.789123-07:00 loc=Local)}"
+      "key=structured:map[string]any{\"id\":string(\"doc-1\"),\"shard\":int64(7)} before=nil after=structured:map[string]any{\"text\":string(\"hello avro codec equivalence\"),\"v\":time.Time(2026-10-14T12:34:56.789123Z loc=UTC)}"
     ],
     "outputs": [
       "0 single op=create pos=pos-1 key=raw:0a646f632d310e before=nil after=raw:3868656c6c6f206176726f20636f646563206571756976616c656e6365869a9d8a85f3ae06053600000000000000e03f00000000000000d0bf000000000000003c4000 md[ai.embedding.dimension]=\"3\" md[ai.embedding.model]=\"fake-model\" md[ai.embedding.provider]=\"fake\" md[ai.embedding.tokensUsed]=\"11\" md[ai.embedding.tokensUsedScope]=\"batch\" md[compat.case]=\"embed/local_timestamp_micros\" md[opencdc.key.schema.subject]=\"compat.embed.local_timestamp_micros.key\" md[opencdc.key.schema.version]=\"2\" md[opencdc.payload.schema.subject]=\"compat.embed.local_timestamp_micros.payload\" md[opencdc.payload.schema.version]=\"2\" keySchema=avro:{\"name\":\"record\",\"type\":\"record\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"shard\",\"type\":\"long\"}]} payloadSchema=avro:{\"name\":\"record\",\"type\":\"record\",\"fields\":[{\"name\":\"text\",\"type\":\"string\"},{\"name\":\"v\",\"type\":{\"type\":\"long\",\"logicalType\":\"timestamp-micros\"}},{\"name\":\"vector\",\"type\":{\"type\":\"array\",\"items\":[\"double\",\"null\"]}}]}"

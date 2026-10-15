@@ -540,6 +540,14 @@ func generateAvroCompatFixtures(t *testing.T, cases []avroCompatCase) {
 }
 
 func TestAvroCodecCompat(t *testing.T) {
+	// local-timestamp-* values are written and read relative to time.Local on
+	// both codecs, so the bytes depend on the machine's zone. Pin UTC (a wasip1
+	// build runs with a zero offset as well). No test in this package
+	// runs in parallel, so swapping the global is safe here.
+	local := time.Local                      //nolint:gosmopolitan // pinning the zone is the point
+	time.Local = time.UTC                    //nolint:gosmopolitan // see above
+	t.Cleanup(func() { time.Local = local }) //nolint:gosmopolitan // restore
+
 	cases := avroCompatCases()
 
 	if os.Getenv(avroCompatGenEnv) == "1" {
