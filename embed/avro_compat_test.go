@@ -94,6 +94,35 @@ type avroCompatCase struct {
 const avroCompatKeySchema = `{"type":"record","name":"Key","fields":[` +
 	`{"name":"id","type":"string"},{"name":"shard","type":"long"}]}`
 
+// knownCodecChange is a difference between the codecs that the test pins
+// instead of hiding: the frozen hamba output must contain old, and the
+// current output must equal the frozen output with old replaced by new.
+type knownCodecChange struct {
+	old, new string
+	why      string
+}
+
+// emptyArrayChange: hamba v2.28.0 decodes an empty Avro array to a nil []any;
+// hamba >= v2.29.0 and iskorotkov/avro decode it to an empty, non-nil []any.
+// The bytes are the same (an empty array is a single 0x00 block count) and so
+// is every schema the encode middleware extracts, but chunk and embed see a
+// different Go value. Neither processor reads these fields; a processor or
+// destination that serializes the value (JSON null vs []) would see it.
+var emptyArrayChange = knownCodecChange{
+	old: "[]any(nil)", new: "[]any{}",
+	why: "empty Avro array decodes to []any{} instead of nil",
+}
+
+// knownCodecChanges maps a case name (without the processor prefix) to the
+// change it pins.
+var knownCodecChanges = map[string]knownCodecChange{
+	"array_empty":           emptyArrayChange,
+	"array_empty_in_record": emptyArrayChange,
+	"nullable_array_empty":  emptyArrayChange,
+	"map_of_empty_array":    emptyArrayChange,
+	"array_of_empty_array":  emptyArrayChange,
+}
+
 func avroCompatCases() []avroCompatCase {
 	ts := time.Date(2026, 10, 14, 12, 34, 56, 789123000, time.UTC)
 	day := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
@@ -120,6 +149,14 @@ func avroCompatCases() []avroCompatCase {
 		{"array_int", `{"type":"array","items":"int"}`, []any{int32(1), int32(2), int32(3)}},
 		{"array_string", `{"type":"array","items":"string"}`, []any{"a", "b"}},
 		{"array_empty", `{"type":"array","items":"long"}`, []any{}},
+		{
+			"array_empty_in_record", `{"type":"record","name":"AR","fields":[{"name":"xs","type":{"type":"array","items":"long"}}]}`,
+			map[string]any{"xs": []any{}},
+		},
+		{"nullable_array_empty", `["null",{"type":"array","items":"long"}]`, []any{}},
+		{"nullable_array_null", `["null",{"type":"array","items":"long"}]`, nil},
+		{"map_of_empty_array", `{"type":"map","values":{"type":"array","items":"long"}}`, map[string]any{"k": []any{}}},
+		{"array_of_empty_array", `{"type":"array","items":{"type":"array","items":"long"}}`, []any{[]any{}}},
 		{"map_long", `{"type":"map","values":"long"}`, map[string]any{"a": int64(1), "b": int64(2)}},
 		{"map_string", `{"type":"map","values":"string"}`, map[string]any{"x": "y"}},
 		{"map_empty", `{"type":"map","values":"string"}`, map[string]any{}},
@@ -447,6 +484,9 @@ func renderValue(v any) string {
 	case nil:
 		return "nil"
 	case map[string]any:
+		if v == nil {
+			return "map[string]any(nil)"
+		}
 		keys := make([]string, 0, len(v))
 		for k := range v {
 			keys = append(keys, k)
@@ -458,6 +498,9 @@ func renderValue(v any) string {
 		}
 		return "map[string]any{" + strings.Join(parts, ",") + "}"
 	case []any:
+		if v == nil {
+			return "[]any(nil)"
+		}
 		parts := make([]string, len(v))
 		for i, e := range v {
 			parts[i] = renderValue(e)
@@ -471,6 +514,9 @@ func renderValue(v any) string {
 	case time.Time:
 		return "time.Time(" + v.Format(time.RFC3339Nano) + " loc=" + v.Location().String() + ")"
 	case []byte:
+		if v == nil {
+			return "[]byte(nil)"
+		}
 		return fmt.Sprintf("[]byte(%x)", v)
 	default:
 		return fmt.Sprintf("%T(%#v)", v, v)
@@ -622,10 +668,33 @@ func TestAvroCodecCompat(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := runAvroCompatCase(t, c, wantKey, wantPayload)
-			compareLines(t, "seen by processor", got.Seen, want.Seen)
-			compareLines(t, "outputs", got.Outputs, want.Outputs)
+			wantSeen, wantOutputs := want.Seen, want.Outputs
+			_, base, _ := strings.Cut(c.name, "/")
+			if kc, ok := knownCodecChanges[base]; ok {
+				// Pin both sides: hamba's value is in the frozen fixture,
+				// the new codec's value in this run.
+				if !strings.Contains(strings.Join(want.Seen, "\n"), kc.old) {
+					t.Fatalf("known change %q: frozen fixture no longer shows %s", kc.why, kc.old)
+				}
+				if strings.Contains(strings.Join(got.Seen, "\n")+strings.Join(got.Outputs, "\n"), kc.old) {
+					t.Fatalf("known change %q: current codec still produces %s", kc.why, kc.old)
+				}
+				wantSeen = replaceAll(want.Seen, kc.old, kc.new)
+				wantOutputs = replaceAll(want.Outputs, kc.old, kc.new)
+				t.Logf("known codec change pinned: %s", kc.why)
+			}
+			compareLines(t, "seen by processor", got.Seen, wantSeen)
+			compareLines(t, "outputs", got.Outputs, wantOutputs)
 		})
 	}
+}
+
+func replaceAll(lines []string, old, repl string) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = strings.ReplaceAll(l, old, repl)
+	}
+	return out
 }
 
 func compareLines(t *testing.T, what string, got, want []string) {
