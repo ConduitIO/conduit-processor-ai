@@ -42,6 +42,18 @@ package embed
 // to check the new codec writes identical bytes. Invariant 6: records
 // written before the move decode, and re-encode, identically after it.
 // Never regenerate the fixtures with the new codec.
+//
+// The outputs (only the outputs) were re-frozen once, for processor-sdk
+// v0.8.0 (conduit-processor-ai#7). v0.8.0 changed what the encode middleware
+// writes, not what the codec reads: it re-encodes with the record's original
+// schema when the data still fits it, instead of a schema rebuilt from the
+// decoded values (conduit-processor-sdk#170). Input bytes, decoded values and
+// encode errors were not touched, and every changed output was audited to
+// differ only in schema text, schema version and encoded bytes that decode to
+// the same values (the audit is in that PR). Codec-specific text from
+// knownCodecChanges is kept in its hamba form, so those pins still compare
+// both codecs. Do not re-freeze outputs mechanically: a processor change
+// would be frozen along with an SDK one.
 
 import (
 	"context"

@@ -6,8 +6,8 @@ github.com/bufbuild/protocompile v0.14.2-0.20260127163740-a85d2ef77713 h1:owghT7
 github.com/bufbuild/protocompile v0.14.2-0.20260127163740-a85d2ef77713/go.mod h1:cxhE8h+14t0Yxq2H9MV/UggzQ1L0gh0t2tJobITWsBE=
 github.com/conduitio/conduit-commons v0.8.0 h1:NLjtS018Kys1oe1wfuu4DTUE4zILhcKgEsbbWPq0X3k=
 github.com/conduitio/conduit-commons v0.8.0/go.mod h1:aeZE6tPtrw0eUw3yIs34WdeebPdDrbFYhsPUkBR+t/g=
-github.com/conduitio/conduit-processor-sdk v0.7.0 h1:j1vAxqQ1kI+zzGAAt30//xqPzps8iO+rnOpgnDHEKPg=
-github.com/conduitio/conduit-processor-sdk v0.7.0/go.mod h1:YpPIUxBF6C39XA3iYjklzvPv5Zh0HOxrM2jwbC7Su4k=
+github.com/conduitio/conduit-processor-sdk v0.8.0 h1:DZcu3MA/nbFBgHDzZ1lDPUECWCTwHP7MHzDlVHXkZg4=
+github.com/conduitio/conduit-processor-sdk v0.8.0/go.mod h1:zniTbcB4zksVXovue9fjaVYqvj9UCYgHcnXq98aQ/QI=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
