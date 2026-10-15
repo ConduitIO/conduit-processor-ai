@@ -42,6 +42,16 @@ package embed
 // to check the new codec writes identical bytes. Invariant 6: records
 // written before the move decode, and re-encode, identically after it.
 // Never regenerate the fixtures with the new codec.
+//
+// The outputs were re-frozen once, on processor-sdk v0.8.0, with
+// AVRO_COMPAT_REGEN_OUTPUTS=1 (regenerateAvroCompatOutputs). v0.8.0 changed
+// what the encode middleware writes, not what the codec reads: it re-encodes
+// with the record's original schema when the data still fits it, instead of a
+// schema rebuilt from the decoded values (conduit-processor-sdk#170). That mode
+// keeps the hamba input bytes and the decoded values frozen, requires the
+// decoded values to match them, and rewrites only the outputs. Codec-specific
+// text from knownCodecChanges is written back in its hamba form, so those pins
+// still compare both codecs.
 
 import (
 	"context"
@@ -70,6 +80,7 @@ import (
 const (
 	avroCompatFixtures = "testdata/avro_compat_fixtures.json"
 	avroCompatGenEnv   = "AVRO_COMPAT_GEN"
+	avroCompatRegenEnv = "AVRO_COMPAT_REGEN_OUTPUTS"
 	hambaModule        = "github.com/hamba/avro/v2"
 )
 
@@ -719,6 +730,72 @@ func generateAvroCompatFixtures(t *testing.T, cases []avroCompatCase) {
 	t.Logf("wrote %d fixtures with %s", len(all), hambaModule)
 }
 
+// regenerateAvroCompatOutputs rewrites only the outputs of the frozen
+// fixtures, after a processor-sdk change to what the encode middleware writes
+// (see the file comment). Input bytes, decode results and encode errors stay
+// frozen; a case whose decoded values no longer match the frozen ones fails,
+// because that would be a codec change, not an SDK one.
+func regenerateAvroCompatOutputs(t *testing.T, cases []avroCompatCase) {
+	t.Helper()
+	raw, err := os.ReadFile(avroCompatFixtures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures []avroCompatFixture
+	if err := json.Unmarshal(raw, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]int, len(fixtures))
+	for i, f := range fixtures {
+		byName[f.Name] = i
+	}
+	changed := 0
+	for _, c := range cases {
+		i, ok := byName[c.name]
+		if !ok {
+			t.Fatalf("no frozen fixture for %q; new cases need AVRO_COMPAT_GEN on the pre-move code", c.name)
+		}
+		f := fixtures[i]
+		if f.EncodeError != "" {
+			continue
+		}
+		withAvroCompatZone(c, func() {
+			kb, err := hex.DecodeString(f.KeyHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pb, err := hex.DecodeString(f.PayloadHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := runAvroCompatCase(t, c, kb, pb)
+			wantSeen := f.Seen
+			outputs := got.Outputs
+			if kc, ok := knownCodecChanges[avroCompatBaseName(c.name)]; ok {
+				for _, pair := range kc.pairs {
+					wantSeen = replaceAll(wantSeen, pair[0], pair[1])
+					outputs = replaceAll(outputs, pair[1], pair[0]) // back to the hamba form
+				}
+			}
+			if strings.Join(got.Seen, "\n") != strings.Join(wantSeen, "\n") {
+				t.Fatalf("%s: decoded values changed, refusing to regenerate outputs:\n got %q\nwant %q", c.name, got.Seen, wantSeen)
+			}
+			if strings.Join(outputs, "\n") != strings.Join(f.Outputs, "\n") {
+				changed++
+			}
+			fixtures[i].Outputs = outputs
+		})
+	}
+	b, err := json.MarshalIndent(fixtures, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(avroCompatFixtures, append(b, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("rewrote outputs of %d of %d fixtures", changed, len(fixtures))
+}
+
 func TestAvroCodecCompat(t *testing.T) {
 	// local-timestamp-* values are written and read relative to time.Local on
 	// both codecs, so the bytes depend on the machine's zone. Each case pins
@@ -728,6 +805,10 @@ func TestAvroCodecCompat(t *testing.T) {
 
 	if os.Getenv(avroCompatGenEnv) == "1" {
 		generateAvroCompatFixtures(t, cases)
+		return
+	}
+	if os.Getenv(avroCompatRegenEnv) == "1" {
+		regenerateAvroCompatOutputs(t, cases)
 		return
 	}
 

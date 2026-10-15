@@ -4,7 +4,7 @@ go 1.26.9
 
 require (
 	github.com/conduitio/conduit-commons v0.8.0
-	github.com/conduitio/conduit-processor-sdk v0.7.0
+	github.com/conduitio/conduit-processor-sdk v0.8.0
 	github.com/jpillora/backoff v1.0.0
 	github.com/matryer/is v1.4.1
 	go.uber.org/mock v0.6.0
